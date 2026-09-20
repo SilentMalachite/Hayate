@@ -97,6 +97,17 @@ classDiagram
         +key_password : string
     }
 
+    class Jwt {
+        +secret : string
+        +issuer : string
+        +audience : string
+        +leeway : seconds
+    }
+
+    class Claims {
+        +json : Json
+    }
+
     class Header {
         +name : string
         +value : string_view
@@ -166,6 +177,8 @@ classDiagram
     Error --> Response : status
     Tls ..> App : app.tls() configures
     Cors ..> Middleware : mw::cors() builds
+    Jwt ..> Middleware : mw::jwt() builds
+    Claims ..> Extension : stored in Request
     RateLimit ..> Middleware : mw::rate_limit() builds
 ```
 
@@ -173,6 +186,8 @@ classDiagram
 `Handler` と `Middleware` は利用者の関数オブジェクトでよい。仮想基底を先に切らない。
 `Listener` は独立した型ではない。App が持つ acceptor と `run()` の accept ループがその役。
 
+JWT は設定値の `Jwt` と、検証後の claims を運ぶ `Claims` の 2 つだけ足す。
+`Claims` を `Json` の別名にしないのは、Extension のキーが `typeid` で、別名だと他の `Json` と衝突するため。
 TLS / CORS / 静的ファイル / レート制限は型を増やさない。`Tls` も設定値の struct で、`ssl::context` は App の中にしか出てこない。
 CORS / 静的ファイル / レート制限は型を増やさない。`Cors` と `RateLimit` は設定値の struct で、
 `mw::cors()` / `mw::rate_limit()` が Middleware を、`files(root, max_bytes, io_threads)` が Handler を返す。

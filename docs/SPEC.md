@@ -89,6 +89,16 @@ Phase 3（TLS）
 - 読めない証明書 / 鍵で `tls()` が投げる
 - 静的ファイルのストリーミングが TLS 上でも `Content-Length` ちょうどで届く
 
+Phase 3（JWT 検証）
+
+- 有効なトークンが 200 で、ハンドラが `Claims` から `sub` を読める
+- ヘッダ欠落 / 形式不正 / 署名改竄 / payload 改竄 / `exp` 切れ / `exp` 無し / `nbf` 未来 /
+  `alg: none` / `alg` 詐称（RS256 ヘッダを HMAC で署名）がすべて 401
+- 401 に `WWW-Authenticate: Bearer` が付く
+- `leeway` の内側で切れたトークンは通る
+- `secret` が空だと `jwt()` が投げる
+- group の外は無認証で通る
+
 Phase 3（metrics）
 
 - 2 本投げてから読むと `requests_total` が 2
@@ -240,6 +250,32 @@ app.tls({.cert_file = "server.pem", .key_file = "server.key"})
 - 終了は TLS shutdown → socket shutdown の順
 - sslv2 / sslv3 / tlsv1 / tlsv1.1 を無効化する。最低 TLS 1.2
 - `Request::peer()` は TLS でも accept 時の remote IP
+
+### JWT 検証（Phase 3）
+
+```cpp
+app.use(hayate::mw::jwt({.secret = "...", .issuer = "", .audience = "",
+                         .leeway = std::chrono::seconds(60)}));
+```
+
+- Middleware。公開型は設定 struct `Jwt` と `Claims` の 2 つだけ
+- **HS256 のみ**。`alg` がそれ以外なら 401（`none` とアルゴリズム混同を断つ）
+- 検証の順
+  1. `Authorization` が `Bearer ` で始まる（スキームは大小無視）
+  2. `.` で 3 つちょうどに割れる
+  3. header と payload が base64url（パディング無し）で復号できる
+  4. header の `alg` が `HS256`
+  5. `HMAC-SHA256(secret, header_b64 + "." + payload_b64)` と署名が一致。比較は定数時間
+  6. payload に `exp` があり、`now > exp + leeway` でない。`exp` 無しは 401
+  7. `nbf` があれば `now + leeway >= nbf`
+  8. `issuer` 設定時は `iss` が一致
+  9. `audience` 設定時は `aud` が一致（文字列、または配列に含む）
+- 失敗はすべて 401 `{"unauthorized"}` + `WWW-Authenticate: Bearer`。どの検査で落ちたかは返さない
+- 通ったら `Claims` を Request Extension に入れる。寿命は Request
+- `secret` が空なら `jwt()` が投げる（`tls()` と同じく設定時に落とす）
+- 適用範囲は `Router::group` で絞る。除外パスの設定項目は持たない
+- RS256 / ES256 / JWKS / 鍵回転 / トークン発行 / 認可判定はしない
+- トークンは `Authorization` からだけ取る。Cookie や query からは取らない
 
 ### metrics（Phase 3）
 

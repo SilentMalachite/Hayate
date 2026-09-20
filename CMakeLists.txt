@@ -41,6 +41,7 @@ add_library(hayate
     src/app.cpp
     src/connection.cpp
     src/files.cpp
+    src/jwt.cpp
 )
 target_include_directories(hayate PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -90,6 +91,7 @@ if(HAYATE_BUILD_TESTS)
         tests/test_offload.cpp
         tests/test_tls.cpp
         tests/test_metrics.cpp
+        tests/test_jwt.cpp
     )
     target_include_directories(hayate_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
     target_link_libraries(hayate_tests PRIVATE hayate GTest::gtest_main)
