@@ -200,6 +200,7 @@ classDiagram
         Route
         Limits
         files impl
+        metrics impl
     }
     class src_detail {
         parser Beast

@@ -15,6 +15,11 @@
 
 namespace hayate {
 
+class App;
+
+// カウンタを Prometheus テキストで返す Handler を作る。App が生きている間だけ有効。
+Handler metrics(App &app);
+
 class App {
   public:
     App();
@@ -50,6 +55,8 @@ class App {
     void stop();
 
   private:
+    friend Handler metrics(App &);
+
     void add_route(HttpMethod method, std::string_view path, Handler handler);
     void add_middleware(Middleware mw);
 

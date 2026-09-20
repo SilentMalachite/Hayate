@@ -213,6 +213,7 @@ sequenceDiagram
 | CORS | `mw::cors(Cors)` | Middleware。preflight は 204 で短絡。固定 origin なら `Vary: Origin` |
 | 静的ファイル | `files(root, max_bytes, io_threads)` | Handler。root 外・上限超過・不在はどれも 404。FS 呼び出しは `files()` 所有のワーカープール。本体は常に 64 KiB ずつ送出 |
 | レート制限 | `mw::rate_limit(RateLimit)` | Middleware。固定窓、`Request::peer` キー |
+| metrics | `metrics(App&)` | Handler。カウンタは App が 1 つ持つ。新しい型は作らない |
 
 `Cors` と `RateLimit` は設定値の struct。`StaticFile` クラスは作らない。
 Response の body は bytes か `FileSource` のどちらか一方。`FileSource` のとき `body()` は空を返す。

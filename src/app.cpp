@@ -1,5 +1,6 @@
 #include "connection.hpp"
 #include "detail/asio.hpp"
+#include "detail/metrics.hpp"
 
 #include <hayate/app.hpp>
 
@@ -42,6 +43,7 @@ struct App::Impl {
     std::atomic<bool> accepting{false};
     std::atomic<bool> shutting{false};
     std::atomic<std::uint32_t> connections{0};
+    detail::Counters counters;
 };
 
 App::App() : impl_(std::make_unique<Impl>()) {}
@@ -105,22 +107,25 @@ boost::asio::awaitable<void> App::run() {
         const auto n = impl_->connections.fetch_add(1) + 1;
         if (n > impl_->limits.max_connections) {
             release_one(impl_->connections);
+            // close より先に数える。相手が EOF を見た時点で値が確定している。
+            impl_->counters.rejected.fetch_add(1, std::memory_order_relaxed);
             boost::system::error_code ignored;
             sock.close(ignored);
             continue;
         }
+        impl_->counters.accepted.fetch_add(1, std::memory_order_relaxed);
         beast::tcp_stream stream(std::move(sock));
         auto done = [impl = impl_.get()] { release_one(impl->connections); };
         if (impl_->ssl_ctx) {
             net::co_spawn(impl_->ioc,
                           serve_connection(detail::tls_stream{std::move(stream), *impl_->ssl_ctx},
-                                           impl_->limits, impl_->router, impl_->shutting,
-                                           std::move(done)),
+                                           impl_->limits, impl_->router, impl_->counters,
+                                           impl_->shutting, std::move(done)),
                           net::detached);
         } else {
             net::co_spawn(impl_->ioc,
                           serve_connection(std::move(stream), impl_->limits, impl_->router,
-                                           impl_->shutting, std::move(done)),
+                                           impl_->counters, impl_->shutting, std::move(done)),
                           net::detached);
         }
     }
@@ -165,6 +170,15 @@ void App::stop() {
         }
         impl->work.reset();
     });
+}
+
+// App::Impl が見えるのはこの翻訳単位だけなので、ここで定義する。
+Handler metrics(App &app) {
+    return [impl = app.impl_.get()](Request &) -> net::awaitable<Response> {
+        auto res = Response::text(detail::render(impl->counters, impl->connections.load()));
+        res.set_header("Content-Type", "text/plain; version=0.0.4; charset=utf-8");
+        co_return res;
+    };
 }
 
 void App::add_route(HttpMethod method, std::string_view path, Handler handler) {
