@@ -39,7 +39,7 @@ int main() {
 - Phase 2: CORS / 静的ファイル / multipart / WS / SSE / gzip / レート制限
 - Phase 3: TLS / JWT 検証 / OpenAPI 生成 / 最小 metrics / 静的ファイルのストリーミング送出
 
-今の受け入れは Phase 1 と CORS と静的ファイルとレート制限と静的ファイルのストリーミング送出。multipart / WS / SSE / gzip は実装しない。
+今の受け入れは Phase 1 と Phase 2（CORS / 静的ファイル / レート制限）と Phase 3（TLS / JWT 検証 / OpenAPI 生成 / 最小 metrics / 静的ファイルのストリーミング送出）。multipart / WS / SSE / gzip は実装しない。
 
 ## やらないこと
 
