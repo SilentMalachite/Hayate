@@ -181,6 +181,10 @@ app.limits({.max_body_bytes = 4u * 1024 * 1024, .max_connections = 4096});
 HTTP/2、HTTP/3、gRPC、GraphQL、HTML テンプレート、ORM、マイグレーション、
 multipart、WebSocket、SSE、gzip、JWT の RS256 / JWKS、mTLS、OpenAPI のスキーマ推論。
 
+## ライセンス
+
+[Apache License 2.0](LICENSE)。
+
 ## ドキュメント
 
 正本は [`docs/SPEC.md`](docs/SPEC.md)。図は [`docs/ER.md`](docs/ER.md) と
