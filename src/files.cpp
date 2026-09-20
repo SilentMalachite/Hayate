@@ -6,8 +6,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
-#include <fstream>
-#include <ios>
 #include <memory>
 #include <string>
 #include <utility>
@@ -51,7 +49,9 @@ std::string mime_type(const fs::path &p) {
 }
 
 // ここは io スレッドではなくワーカープールで走る。例外を投げない（境界を越えさせない）。
-Response load_blocking(const fs::path &root, const std::string &raw, std::uint64_t max_bytes) {
+// バイトは読まない。どこを読めばよいかだけを Response に載せて Connection に渡す。
+Response stat_blocking(const fs::path &root, const std::string &raw, std::uint64_t max_bytes,
+                       std::shared_ptr<net::thread_pool> pool) {
     const fs::path rel{raw};
     std::error_code ec;
     auto target = fs::weakly_canonical(root / rel, ec);
@@ -71,22 +71,17 @@ Response load_blocking(const fs::path &root, const std::string &raw, std::uint64
     if (!fs::is_regular_file(target, file_ec)) {
         return not_found();
     }
-    // 全文をメモリに読むので、読む前に上限で切る。
     std::error_code size_ec;
     const auto size = fs::file_size(target, size_ec);
-    if (size_ec || size > max_bytes) {
+    if (size_ec) {
         return not_found();
     }
-    std::ifstream in(target, std::ios::binary);
-    if (!in) {
+    // max_bytes は配布上限。0 は無制限。メモリはサイズに依らず一定。
+    if (max_bytes != 0 && size > max_bytes) {
         return not_found();
     }
-    std::string body;
-    body.resize(static_cast<std::size_t>(size));
-    in.read(body.data(), static_cast<std::streamsize>(size));
-    body.resize(static_cast<std::size_t>(in.gcount()));
-    auto res = Response::text(body);
-    res.set_header("Content-Type", mime_type(target));
+    auto res = Response::file({std::move(target), size, std::move(pool)});
+    res.set_header("Content-Type", mime_type(res.file_source()->path));
     return res;
 }
 
@@ -108,8 +103,8 @@ Handler files(std::string_view root, std::uint64_t max_bytes, std::uint32_t io_t
         if (raw.find('\0') != std::string::npos || fs::path{raw}.is_absolute()) {
             co_return not_found();
         }
-        co_return co_await detail::offload(*pool, [root_path, raw, max_bytes] {
-            return load_blocking(root_path, raw, max_bytes);
+        co_return co_await detail::offload(*pool, [root_path, raw, max_bytes, pool] {
+            return stat_blocking(root_path, raw, max_bytes, pool);
         });
     };
 }

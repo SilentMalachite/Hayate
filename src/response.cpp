@@ -4,6 +4,8 @@
 
 #include <cstddef>
 #include <string>
+#include <utility>
+#include <variant>
 
 namespace hayate {
 namespace {
@@ -73,7 +75,18 @@ std::string sanitize_value(std::string_view value) {
 
 std::uint16_t Response::status() const noexcept { return status_; }
 
-std::string_view Response::body() const noexcept { return body_; }
+std::string_view Response::body() const noexcept {
+    if (const auto *bytes = std::get_if<std::string>(&body_)) {
+        return *bytes;
+    }
+    return {};
+}
+
+bool Response::is_file() const noexcept { return std::holds_alternative<FileSource>(body_); }
+
+const Response::FileSource *Response::file_source() const noexcept {
+    return std::get_if<FileSource>(&body_);
+}
 
 std::string_view Response::header(std::string_view name) const noexcept {
     for (const auto &[k, v] : headers_) {
@@ -123,6 +136,13 @@ Response Response::json(const Json &v) {
 Response Response::no_content() {
     Response r;
     r.status_ = 204;
+    return r;
+}
+
+Response Response::file(FileSource src) {
+    Response r;
+    r.status_ = 200;
+    r.body_ = std::move(src);
     return r;
 }
 

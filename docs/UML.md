@@ -82,6 +82,13 @@ classDiagram
         +text(s)$ Response
         +json(v)$ Response
         +no_content()$ Response
+        +file(src)$ Response
+        +is_file() bool
+    }
+
+    class FileSource {
+        +path : path
+        +size : uint64
     }
 
     class Header {
@@ -139,6 +146,7 @@ classDiagram
     Listener o-- "*" Connection : accept
     Connection o-- Request : Req lifetime
     Connection o-- Response : write
+    Response o-- FileSource : streamed body
     Request o-- "*" Header : view
     Request o-- "*" QueryPair : view
     Request o-- "*" PathParam : view
@@ -162,6 +170,7 @@ CORS / 静的ファイル / レート制限は型を増やさない。`Cors` と
 `mw::cors()` / `mw::rate_limit()` が Middleware を、`files(root, max_bytes, io_threads)` が Handler を返す。
 `StaticFile` / `Service` のようなクラスは作らない。
 `files()` のワーカープールは返されたクロージャが持つ所有物で、図の要素にはしない。
+`FileSource` は型ではなく Response の body の片方の姿。bytes か FileSource のどちらか一方を持つ。
 
 ## パッケージ
 

@@ -177,3 +177,90 @@ TEST(Static, NulInPathIs404) {
     auto r = http_call("127.0.0.1", srv.port(), http::verb::get, "/assets/hello.txt%00.png");
     EXPECT_EQ(r.status, 404) << r.body;
 }
+
+TEST(Static, LargeFileIsStreamedWhole) {
+    StaticDir root;
+    // 64 KiB チャンクを 3 本 + 端数。ループが複数回まわる大きさ。
+    std::string want;
+    want.reserve(200 * 1024);
+    for (std::size_t i = 0; want.size() < 200 * 1024; ++i) {
+        want += "hayate-" + std::to_string(i) + "\n";
+    }
+    {
+        std::ofstream out(root.dir / "big.bin", std::ios::binary);
+        out << want;
+    }
+    TestServer srv(
+        [&](hayate::App &app) { app.get("/assets/*path", hayate::files(root.dir.string())); });
+    auto r = http_call("127.0.0.1", srv.port(), http::verb::get, "/assets/big.bin", {}, {},
+                       std::chrono::seconds(5), {}, {"Content-Length", "Transfer-Encoding"});
+    EXPECT_EQ(r.status, 200);
+    EXPECT_EQ(r.body.size(), want.size());
+    EXPECT_EQ(r.body, want);
+    EXPECT_EQ(r.extra["Content-Length"], std::to_string(want.size()));
+    EXPECT_TRUE(r.extra["Transfer-Encoding"].empty());
+}
+
+TEST(Static, EmptyFileIsServed) {
+    StaticDir root;
+    {
+        std::ofstream out(root.dir / "empty.txt", std::ios::binary);
+    }
+    TestServer srv(
+        [&](hayate::App &app) { app.get("/assets/*path", hayate::files(root.dir.string())); });
+    auto r = http_call("127.0.0.1", srv.port(), http::verb::get, "/assets/empty.txt", {}, {},
+                       std::chrono::seconds(2), {}, {"Content-Length"});
+    EXPECT_EQ(r.status, 200);
+    EXPECT_TRUE(r.body.empty());
+    EXPECT_EQ(r.extra["Content-Length"], "0");
+}
+
+TEST(Static, DefaultHasNoSizeCap) {
+    StaticDir root;
+    // 旧既定（1 MiB）なら 404 になっていた大きさ。
+    const std::string want(2 * 1024 * 1024, 'x');
+    {
+        std::ofstream out(root.dir / "huge.bin", std::ios::binary);
+        out << want;
+    }
+    TestServer srv(
+        [&](hayate::App &app) { app.get("/assets/*path", hayate::files(root.dir.string())); });
+    auto r = http_call("127.0.0.1", srv.port(), http::verb::get, "/assets/huge.bin", {}, {},
+                       std::chrono::seconds(10));
+    EXPECT_EQ(r.status, 200);
+    EXPECT_EQ(r.body.size(), want.size());
+}
+
+TEST(Static, KeepAliveAfterStreamedFile) {
+    StaticDir root;
+    const std::string big(200 * 1024, 'y');
+    {
+        std::ofstream out(root.dir / "big.bin", std::ios::binary);
+        out << big;
+    }
+    {
+        std::ofstream out(root.dir / "small.txt");
+        out << "hi";
+    }
+    TestServer srv(
+        [&](hayate::App &app) { app.get("/assets/*path", hayate::files(root.dir.string())); });
+    namespace net = boost::asio;
+    net::io_context ioc;
+    boost::beast::tcp_stream stream(ioc);
+    stream.expires_after(std::chrono::seconds(5));
+    stream.connect(net::ip::tcp::endpoint(net::ip::make_address("127.0.0.1"), srv.port()));
+    boost::beast::flat_buffer buf;
+    auto send = [&](const std::string &target) {
+        stream.expires_after(std::chrono::seconds(5));
+        http::request<http::string_body> req{http::verb::get, target, 11};
+        req.set(http::field::host, "127.0.0.1");
+        req.keep_alive(true);
+        http::write(stream, req);
+        http::response<http::string_body> res;
+        http::read(stream, buf, res);
+        return res.body();
+    };
+    // 1 本目を Content-Length ちょうどで閉じていなければ 2 本目が読めない。
+    EXPECT_EQ(send("/assets/big.bin").size(), big.size());
+    EXPECT_EQ(send("/assets/small.txt"), "hi");
+}

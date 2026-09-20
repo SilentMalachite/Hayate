@@ -1,4 +1,5 @@
 #include "connection.hpp"
+#include "detail/offload.hpp"
 #include "detail/percent.hpp"
 
 #include <hayate/error.hpp>
@@ -7,10 +8,14 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
+#include <vector>
 
 namespace hayate {
 namespace beast = detail::beast;
@@ -19,6 +24,9 @@ namespace net = detail::net;
 using tcp = detail::tcp;
 
 namespace {
+
+// 1 応答のメモリをファイルサイズから切り離す窓。
+constexpr std::size_t chunk_bytes = 65536;
 
 http::response<http::string_body> to_beast(const Response &src, unsigned version, bool keep_alive) {
     http::response<http::string_body> out{http::status(src.status()), version};
@@ -102,6 +110,57 @@ class Connection : public std::enable_shared_from_this<Connection> {
         dst.peer_ = peer_;
     }
 
+    // 送出中も io スレッドを塞がない。読みは FileSource のプールで回す。
+    // 返り値 false は「接続をもう使えない」。ヘッダを送った後は status を直せない。
+    net::awaitable<bool> write_file(const Response &res, unsigned version, bool keep) {
+        const auto *src = res.file_source();
+        beast::file f;
+        const auto oec = co_await detail::offload(*src->pool, [&] {
+            boost::system::error_code ec;
+            f.open(src->path.string().c_str(), beast::file_mode::scan, ec);
+            return ec;
+        });
+        if (oec) {
+            co_return false;
+        }
+        http::response<http::buffer_body> out{http::status(res.status()), version};
+        out.keep_alive(keep);
+        res.for_each_header([&](std::string_view k, std::string_view v) { out.set(k, v); });
+        out.content_length(src->size);
+        http::response_serializer<http::buffer_body> sr{out};
+        std::vector<char> buf(chunk_bytes);
+        std::uint64_t left = src->size;
+        for (;;) {
+            std::size_t n = 0;
+            if (left > 0) {
+                const auto want =
+                    static_cast<std::size_t>(std::min<std::uint64_t>(buf.size(), left));
+                n = co_await detail::offload(*src->pool, [&] {
+                    boost::system::error_code rec;
+                    return f.read(buf.data(), want, rec);
+                });
+                // stat より縮んだ / 読めない。Content-Length を満たせないので打ち切る。
+                if (n == 0) {
+                    co_return false;
+                }
+            }
+            out.body().data = buf.data();
+            out.body().size = n;
+            left -= n;
+            out.body().more = left > 0;
+            stream_.expires_after(limits_.write_timeout);
+            auto [wec, wbytes] = co_await http::async_write(stream_, sr, net::as_tuple);
+            (void)wbytes;
+            if (wec && wec != http::error::need_buffer) {
+                co_return false;
+            }
+            if (left == 0) {
+                break;
+            }
+        }
+        co_return true;
+    }
+
     net::awaitable<void> run() {
         auto self = shared_from_this();
         try {
@@ -140,6 +199,13 @@ class Connection : public std::enable_shared_from_this<Connection> {
                 load(req, parser.get());
                 Response res = co_await router_.dispatch(req);
                 bool keep = parser.get().keep_alive() && !shutting_.load();
+                if (res.is_file()) {
+                    const bool ok = co_await write_file(res, parser.get().version(), keep);
+                    if (!ok || !keep) {
+                        break;
+                    }
+                    continue;
+                }
                 auto out = to_beast(res, parser.get().version(), keep);
                 stream_.expires_after(limits_.write_timeout);
                 auto [wec, wbytes] = co_await http::async_write(stream_, out, net::as_tuple);
