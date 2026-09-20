@@ -11,12 +11,15 @@ option(HAYATE_BUILD_EXAMPLES "Build examples" OFF)
 
 if(APPLE AND EXISTS /opt/homebrew)
     list(APPEND CMAKE_PREFIX_PATH /opt/homebrew)
+    # Homebrew の openssl は keg-only。system の LibreSSL を拾わせない。
+    list(APPEND CMAKE_PREFIX_PATH /opt/homebrew/opt/openssl@3)
 endif()
 
 if(POLICY CMP0167)
     cmake_policy(SET CMP0167 NEW)
 endif()
 find_package(Boost 1.83 REQUIRED CONFIG)
+find_package(OpenSSL 3 REQUIRED)
 find_package(Threads REQUIRED)
 
 if(NOT Boost_FOUND)
@@ -49,6 +52,8 @@ else()
 endif()
 target_link_libraries(hayate PUBLIC
     nlohmann_json::nlohmann_json
+    OpenSSL::SSL
+    OpenSSL::Crypto
     Threads::Threads
 )
 target_compile_features(hayate PUBLIC cxx_std_20)
@@ -83,6 +88,7 @@ if(HAYATE_BUILD_TESTS)
         tests/test_static.cpp
         tests/test_rate_limit.cpp
         tests/test_offload.cpp
+        tests/test_tls.cpp
     )
     target_include_directories(hayate_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
     target_link_libraries(hayate_tests PRIVATE hayate GTest::gtest_main)

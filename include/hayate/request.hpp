@@ -16,7 +16,7 @@
 
 namespace hayate {
 
-class Connection;
+template <typename Stream> class Connection;
 
 class Request {
   public:
@@ -37,7 +37,7 @@ class Request {
     template <typename T> T *get() noexcept;
 
   private:
-    friend class Connection;
+    template <typename Stream> friend class Connection;
     friend class Router;
 
     HttpMethod method_{HttpMethod::get};
