@@ -82,7 +82,9 @@ if(HAYATE_BUILD_TESTS)
         tests/test_cors.cpp
         tests/test_static.cpp
         tests/test_rate_limit.cpp
+        tests/test_offload.cpp
     )
+    target_include_directories(hayate_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
     target_link_libraries(hayate_tests PRIVATE hayate GTest::gtest_main)
     include(GoogleTest)
     gtest_discover_tests(hayate_tests)

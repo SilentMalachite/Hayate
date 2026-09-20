@@ -37,7 +37,7 @@ int main() {
 - Phase 0: CMake Presets、公開ヘッダの骨格、固定応答の Hello
 - Phase 1: HTTP/1.1、ルーティング、JSON、MW、制限、graceful shutdown
 - Phase 2: CORS / 静的ファイル / multipart / WS / SSE / gzip / レート制限
-- Phase 3: TLS / JWT 検証 / OpenAPI 生成 / 最小 metrics
+- Phase 3: TLS / JWT 検証 / OpenAPI 生成 / 最小 metrics / 静的ファイルのストリーミング送出
 
 今の受け入れは Phase 1 と CORS と静的ファイルとレート制限。multipart / WS / SSE / gzip は実装しない。
 
@@ -80,6 +80,7 @@ Phase 1
 - ビルド: CMake 3.28+、Presets `debug` / `release` / `test`。ASan は debug の既定
 - 対象: macOS (Apple Clang) と Linux (GCC 12+ / Clang 16+)。Windows は後追い
 - I/O: Boost.Asio 1.83+。`asio::awaitable` / `co_spawn`。公開ヘッダで `namespace asio = boost::asio;`
+- ファイル I/O: ブロッキング FS 呼び出しは `asio::thread_pool` に逃がす。`asio::stream_file` は `BOOST_ASIO_HAS_FILE`（Windows ハンドル / Linux io_uring）依存で macOS に無いため使わない
 - HTTP / WS: Boost.Beast（HTTP/1.1）
 - TLS: OpenSSL via `asio::ssl`（Phase 3。実装しない）
 - JSON: nlohmann/json v3.11.3 1 本。`hayate::Json` は `nlohmann::json` の別名。現行 glaze は C++23 必須のため採用しない。混在禁止
@@ -220,10 +221,11 @@ app.use(hayate::mw::cors({.origin = "https://app.example"}));
 ```cpp
 app.get("/assets/*path", hayate::files("public"));
 app.get("/assets/*path", hayate::files("public", 4u * 1024 * 1024));
+app.get("/assets/*path", hayate::files("public", 4u * 1024 * 1024, 4));
 ```
 
 - Handler 工場。`StaticFile` クラスは足さない（ER: Handler にぶら下がる）
-- 署名は `Handler files(std::string_view root, std::uint64_t max_bytes = 1048576)`
+- 署名は `Handler files(std::string_view root, std::uint64_t max_bytes = 1048576, std::uint32_t io_threads = 2)`
 - 全文をメモリに読む。`max_bytes` を超える実ファイルは 404（存在を漏らさない）
 - root の末尾 `/` は無視する。登録時に root が無くても同じ扱い
 - wildcard 名は `path`。空なら `index.html`
@@ -232,6 +234,14 @@ app.get("/assets/*path", hayate::files("public", 4u * 1024 * 1024));
 - 無いファイル・ディレクトリで `index.html` も無いときは 404
 - ディレクトリで `index.html` があればそれを返す
 - Content-Type は拡張子（`.html` `text/html`、`.css` `text/css`、`.js` `application/javascript`、`.json` `application/json`、`.txt` `text/plain`、その他 `application/octet-stream`）
+
+I/O モデル:
+
+- 正規化・stat・open・read は `files()` が所有するワーカープールで行う。io スレッドは filesystem を待たない
+- プールは `files()` 1 回につき 1 つ、`io_threads` 本。既定 2。`0` は 1 に切り上げる
+- 同時に走る読みは `io_threads` 本まで。溢れた分はプールのキューで待つ
+- `max_bytes` は 1 応答あたりのメモリ上限。全体の上限ではない（in-flight 数 × `max_bytes`）。全体を縛るストリーミング送出は Phase 3
+- 読みが `read_timeout` を超えた接続は既存のタイムアウト窓どおり閉じる（応答は書かない）
 
 ### レート制限（Phase 2）
 
