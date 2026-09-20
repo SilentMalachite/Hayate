@@ -5,6 +5,7 @@
 
 #include <atomic>
 #include <csignal>
+#include <cstdint>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -13,6 +14,17 @@ namespace hayate {
 namespace beast = detail::beast;
 namespace net = detail::net;
 using tcp = detail::tcp;
+
+namespace {
+
+// 0 を下回らせない。accept 側と Connection の終了側の両方から呼ばれる。
+void release_one(std::atomic<std::uint32_t> &n) {
+    auto cur = n.load();
+    while (cur > 0 && !n.compare_exchange_weak(cur, cur - 1)) {
+    }
+}
+
+} // namespace
 
 struct App::Impl {
     net::io_context ioc;
@@ -72,24 +84,17 @@ boost::asio::awaitable<void> App::run() {
         }
         const auto n = impl_->connections.fetch_add(1) + 1;
         if (n > impl_->limits.max_connections) {
-            auto cur = impl_->connections.load();
-            while (cur > 0 && !impl_->connections.compare_exchange_weak(cur, cur - 1)) {
-            }
+            release_one(impl_->connections);
             boost::system::error_code ignored;
             sock.close(ignored);
             continue;
         }
         beast::tcp_stream stream(std::move(sock));
-        net::co_spawn(
-            impl_->ioc,
-            serve_connection(std::move(stream), impl_->limits, impl_->router, impl_->shutting,
-                             [impl = impl_.get()] {
-                                 auto cur = impl->connections.load();
-                                 while (cur > 0 &&
-                                        !impl->connections.compare_exchange_weak(cur, cur - 1)) {
-                                 }
-                             }),
-            net::detached);
+        net::co_spawn(impl_->ioc,
+                      serve_connection(std::move(stream), impl_->limits, impl_->router,
+                                       impl_->shutting,
+                                       [impl = impl_.get()] { release_one(impl->connections); }),
+                      net::detached);
     }
     co_return;
 }

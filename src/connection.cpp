@@ -1,12 +1,14 @@
 #include "connection.hpp"
 #include "detail/percent.hpp"
 
+#include <hayate/error.hpp>
 #include <hayate/request.hpp>
 #include <hayate/response.hpp>
 
 #include <algorithm>
 #include <atomic>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 
@@ -25,6 +27,17 @@ http::response<http::string_body> to_beast(const Response &src, unsigned version
     out.body() = std::string(src.body());
     out.prepare_payload();
     return out;
+}
+
+// 上限超過だけは応答を書ける。timeout や peer close は書き先が無い。
+std::optional<Error> limit_error(const boost::system::error_code &ec) {
+    if (ec == http::error::body_limit) {
+        return Error{"payload_too_large", "Payload Too Large", 413};
+    }
+    if (ec == http::error::header_limit || ec == http::error::buffer_overflow) {
+        return Error{"header_too_large", "Request Header Fields Too Large", 431};
+    }
+    return std::nullopt;
 }
 
 } // namespace
@@ -116,17 +129,8 @@ class Connection : public std::enable_shared_from_this<Connection> {
                     ec = bec;
                 }
                 if (ec) {
-                    if (ec == http::error::body_limit) {
-                        auto res =
-                            Response::from_error({"payload_too_large", "Payload Too Large", 413});
-                        auto out = to_beast(res, 11, false);
-                        stream_.expires_after(limits_.write_timeout);
-                        co_await http::async_write(stream_, out, net::as_tuple);
-                    } else if (ec == http::error::header_limit ||
-                               ec == http::error::buffer_overflow) {
-                        auto res = Response::from_error(
-                            {"header_too_large", "Request Header Fields Too Large", 431});
-                        auto out = to_beast(res, 11, false);
+                    if (const auto over = limit_error(ec)) {
+                        auto out = to_beast(Response::from_error(*over), 11, false);
                         stream_.expires_after(limits_.write_timeout);
                         co_await http::async_write(stream_, out, net::as_tuple);
                     }

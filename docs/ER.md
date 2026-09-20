@@ -142,7 +142,7 @@ erDiagram
 | 左 | 多重度 | 右 | 所有 / 寿命 | 備考 |
 |---|---|---|---|---|
 | App | 1—1 | Router | App が所有 | 神オブジェクトを増やさない。根は App |
-| App | 1—1 | Listener | App が所有 | `bind` の結果。shutdown で新規受付停止 |
+| App | 1—1 | Listener | App が所有 | `bind` の結果。shutdown で新規受付停止。型ではなく App の acceptor と accept ループ |
 | App | 1—* | IoContext | App が所有 | 基本 1。`threads(n)` で複数 |
 | Router | 1—* | Route | Router が所有 | 静的 / `:param` / `*wildcard` |
 | Router | 1—* | Middleware | Router が所有 | onion。入り登録順、戻り逆順。App の `use` は 404/405 も包む。`group` の分はマッチした Route だけ |

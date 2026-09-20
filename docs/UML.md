@@ -156,6 +156,7 @@ classDiagram
 
 合成 `*--` は所有。集約 `o--` は寿命が親に縛られるが、Request 配下の Header / Body は **非所有 view**。
 `Handler` と `Middleware` は利用者の関数オブジェクトでよい。仮想基底を先に切らない。
+`Listener` は独立した型ではない。App が持つ acceptor と `run()` の accept ループがその役。
 
 CORS / 静的ファイル / レート制限は型を増やさない。`Cors` と `RateLimit` は設定値の struct で、
 `mw::cors()` / `mw::rate_limit()` が Middleware を、`files(root, max_bytes)` が Handler を返す。
@@ -177,7 +178,6 @@ classDiagram
         files
     }
     class src {
-        Listener
         Connection
         Route
         Limits

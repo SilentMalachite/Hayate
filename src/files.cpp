@@ -1,3 +1,5 @@
+#include "detail/ascii.hpp"
+
 #include <hayate/files.hpp>
 
 #include <cstddef>
@@ -13,6 +15,8 @@ namespace fs = std::filesystem;
 
 namespace {
 
+Response not_found() { return Response::from_error({"not_found", "Not Found", 404}); }
+
 bool contained(const fs::path &root, const fs::path &cand) {
     const auto r = root.native();
     const auto c = cand.native();
@@ -24,12 +28,7 @@ bool contained(const fs::path &root, const fs::path &cand) {
 }
 
 std::string mime_type(const fs::path &p) {
-    auto ext = p.extension().string();
-    for (char &ch : ext) {
-        if (ch >= 'A' && ch <= 'Z') {
-            ch = static_cast<char>(ch - 'A' + 'a');
-        }
-    }
+    const auto ext = detail::lower_copy(p.extension().string());
     if (ext == ".html" || ext == ".htm") {
         return "text/html";
     }
@@ -61,36 +60,36 @@ Handler files(std::string_view root, std::uint64_t max_bytes) {
         const std::string raw(req.param("path"));
         // NUL があると OS は手前で切る。contained() が見る名前と開く名前がずれる。
         if (raw.find('\0') != std::string::npos) {
-            co_return Response::from_error({"not_found", "Not Found", 404});
+            co_return not_found();
         }
         const fs::path rel{raw};
         if (rel.is_absolute()) {
-            co_return Response::from_error({"not_found", "Not Found", 404});
+            co_return not_found();
         }
         auto target = fs::weakly_canonical(root_path / rel);
         if (!contained(root_path, target)) {
-            co_return Response::from_error({"not_found", "Not Found", 404});
+            co_return not_found();
         }
         std::error_code dir_ec;
         if (rel.empty() || fs::is_directory(target, dir_ec)) {
             target /= "index.html";
         }
         if (!contained(root_path, fs::weakly_canonical(target))) {
-            co_return Response::from_error({"not_found", "Not Found", 404});
+            co_return not_found();
         }
         std::error_code file_ec;
         if (!fs::is_regular_file(target, file_ec)) {
-            co_return Response::from_error({"not_found", "Not Found", 404});
+            co_return not_found();
         }
         // 全文をメモリに読むので、読む前に上限で切る。
         std::error_code size_ec;
         const auto size = fs::file_size(target, size_ec);
         if (size_ec || size > max_bytes) {
-            co_return Response::from_error({"not_found", "Not Found", 404});
+            co_return not_found();
         }
         std::ifstream in(target, std::ios::binary);
         if (!in) {
-            co_return Response::from_error({"not_found", "Not Found", 404});
+            co_return not_found();
         }
         std::string body;
         body.resize(static_cast<std::size_t>(size));

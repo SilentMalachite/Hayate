@@ -162,6 +162,10 @@ Handler compose(const std::vector<Middleware> &mws, Handler h) {
 
 Response not_found() { return Response::from_error({"not_found", "Not Found", 404}); }
 
+Response internal_error() {
+    return Response::from_error({"internal", "Internal Server Error", 500});
+}
+
 Response not_allowed(std::string allow) {
     auto r = Response::from_error({"method_not_allowed", "Method Not Allowed", 405});
     r.set_header("Allow", std::move(allow));
@@ -233,7 +237,7 @@ boost::asio::awaitable<Response> Router::dispatch(Request &req) const {
     try {
         co_return co_await h(req);
     } catch (...) {
-        co_return Response::from_error({"internal", "Internal Server Error", 500});
+        co_return internal_error();
     }
 }
 
@@ -284,7 +288,7 @@ boost::asio::awaitable<Response> Router::dispatch_route(Request &req) const {
     try {
         co_return co_await best->handler(req);
     } catch (...) {
-        co_return Response::from_error({"internal", "Internal Server Error", 500});
+        co_return internal_error();
     }
 }
 

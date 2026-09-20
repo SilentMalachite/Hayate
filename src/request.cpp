@@ -1,3 +1,5 @@
+#include "detail/ascii.hpp"
+
 #include <hayate/request.hpp>
 
 namespace hayate {
@@ -17,25 +19,8 @@ std::string_view Request::query(std::string_view key) const noexcept {
 
 std::string_view Request::header(std::string_view name) const noexcept {
     for (const auto &[k, v] : headers_) {
-        if (k.size() == name.size()) {
-            bool eq = true;
-            for (std::size_t i = 0; i < k.size(); ++i) {
-                char a = k[i];
-                char b = name[i];
-                if (a >= 'A' && a <= 'Z') {
-                    a = static_cast<char>(a - 'A' + 'a');
-                }
-                if (b >= 'A' && b <= 'Z') {
-                    b = static_cast<char>(b - 'A' + 'a');
-                }
-                if (a != b) {
-                    eq = false;
-                    break;
-                }
-            }
-            if (eq) {
-                return v;
-            }
+        if (detail::iequals(k, name)) {
+            return v;
         }
     }
     return {};

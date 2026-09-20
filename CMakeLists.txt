@@ -32,12 +32,10 @@ set(JSON_BuildTests OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(nlohmann_json)
 
 add_library(hayate
-    src/error.cpp
     src/request.cpp
     src/response.cpp
     src/router.cpp
     src/app.cpp
-    src/listener.cpp
     src/connection.cpp
     src/files.cpp
 )
