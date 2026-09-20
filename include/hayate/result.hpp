@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cassert>
 #include <hayate/error.hpp>
 #include <utility>
 #include <variant>
@@ -15,10 +16,22 @@ template <typename T> class Result {
         return Result(std::variant<T, Error>(std::in_place_index<1>, std::move(error)));
     }
     bool ok() const noexcept { return v_.index() == 0; }
-    T &value() & { return std::get<0>(v_); }
-    const T &value() const & { return std::get<0>(v_); }
-    T value() && { return std::get<0>(std::move(v_)); }
-    const Error &error() const & { return std::get<1>(v_); }
+    T &value() & {
+        assert(ok());
+        return std::get<0>(v_);
+    }
+    const T &value() const & {
+        assert(ok());
+        return std::get<0>(v_);
+    }
+    T value() && {
+        assert(ok());
+        return std::get<0>(std::move(v_));
+    }
+    const Error &error() const & {
+        assert(!ok());
+        return std::get<1>(v_);
+    }
 
   private:
     explicit Result(std::variant<T, Error> v) : v_(std::move(v)) {}

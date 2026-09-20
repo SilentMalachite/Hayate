@@ -42,6 +42,37 @@ TEST(Json, PostEcho) {
     EXPECT_EQ(hayate::Json::parse(r.body)["id"], "7");
 }
 
+TEST(Json, TypeMismatchIs400) {
+    TestServer srv([](hayate::App &app) {
+        app.post("/s", [](hayate::Request &req) {
+            auto body = req.json<std::string>();
+            if (!body.ok()) {
+                return hayate::Response::from_error(body.error());
+            }
+            return hayate::Response::text(body.value());
+        });
+    });
+    auto r = http_call("127.0.0.1", srv.port(), boost::beast::http::verb::post, "/s",
+                       R"({"id":"7"})", "application/json");
+    EXPECT_EQ(r.status, 400);
+}
+
+TEST(Json, TypeOkString) {
+    TestServer srv([](hayate::App &app) {
+        app.post("/s", [](hayate::Request &req) {
+            auto body = req.json<std::string>();
+            if (!body.ok()) {
+                return hayate::Response::from_error(body.error());
+            }
+            return hayate::Response::text(body.value());
+        });
+    });
+    auto r = http_call("127.0.0.1", srv.port(), boost::beast::http::verb::post, "/s", R"("hello")",
+                       "application/json");
+    EXPECT_EQ(r.status, 200);
+    EXPECT_EQ(r.body, "hello");
+}
+
 TEST(Json, BadBodyIs400) {
     TestServer srv([](hayate::App &app) {
         app.post("/echo", [](hayate::Request &req) {

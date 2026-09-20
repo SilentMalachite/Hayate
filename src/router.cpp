@@ -1,3 +1,5 @@
+#include "detail/percent.hpp"
+
 #include <hayate/router.hpp>
 
 #include <algorithm>
@@ -160,13 +162,29 @@ Handler compose(const std::vector<Middleware> &mws, Handler h) {
 
 Response not_found() { return Response::from_error({"not_found", "Not Found", 404}); }
 
+Response internal_error() {
+    return Response::from_error({"internal", "Internal Server Error", 500});
+}
+
 Response not_allowed(std::string allow) {
     auto r = Response::from_error({"method_not_allowed", "Method Not Allowed", 405});
     r.set_header("Allow", std::move(allow));
     return r;
 }
 
-std::string method_name(HttpMethod m) { return m == HttpMethod::post ? "POST" : "GET"; }
+std::string method_name(HttpMethod m) {
+    switch (m) {
+    case HttpMethod::post:
+        return "POST";
+    case HttpMethod::options:
+        return "OPTIONS";
+    case HttpMethod::get:
+        return "GET";
+    case HttpMethod::unknown:
+        return "";
+    }
+    return "";
+}
 
 } // namespace
 
@@ -211,7 +229,24 @@ Router &Router::group(std::string_view prefix, std::function<void(Router &)> fn)
 }
 
 boost::asio::awaitable<Response> Router::dispatch(Request &req) const {
-    const auto parts = split_path(req.path());
+    Handler inner = [this](Request &r) -> boost::asio::awaitable<Response> {
+        co_return co_await dispatch_route(r);
+    };
+    Handler h = compose(impl_->mws, std::move(inner));
+    // 中の catch はハンドラだけを守る。MW 自身が投げた分はここで受けないと接続が落ちる。
+    try {
+        co_return co_await h(req);
+    } catch (...) {
+        co_return internal_error();
+    }
+}
+
+boost::asio::awaitable<Response> Router::dispatch_route(Request &req) const {
+    // 分けてから復号する。先に復号すると %2F が区切りになって別のパスに化ける。
+    auto parts = split_path(req.path());
+    for (auto &p : parts) {
+        p = detail::percent_decode(p, false);
+    }
     const Impl::Route *best = nullptr;
     Match best_match;
     bool path_ok = false;
@@ -250,11 +285,10 @@ boost::asio::awaitable<Response> Router::dispatch(Request &req) const {
     }
 
     req.params_ = std::move(best_match.params);
-    Handler h = compose(impl_->mws, best->handler);
     try {
-        co_return co_await h(req);
+        co_return co_await best->handler(req);
     } catch (...) {
-        co_return Response::from_error({"internal", "Internal Server Error", 500});
+        co_return internal_error();
     }
 }
 

@@ -5,6 +5,7 @@
 
 #include <atomic>
 #include <csignal>
+#include <cstdint>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -13,6 +14,17 @@ namespace hayate {
 namespace beast = detail::beast;
 namespace net = detail::net;
 using tcp = detail::tcp;
+
+namespace {
+
+// 0 を下回らせない。accept 側と Connection の終了側の両方から呼ばれる。
+void release_one(std::atomic<std::uint32_t> &n) {
+    auto cur = n.load();
+    while (cur > 0 && !n.compare_exchange_weak(cur, cur - 1)) {
+    }
+}
+
+} // namespace
 
 struct App::Impl {
     net::io_context ioc;
@@ -70,17 +82,18 @@ boost::asio::awaitable<void> App::run() {
         if (ec) {
             break;
         }
-        if (impl_->connections.load() >= impl_->limits.max_connections) {
+        const auto n = impl_->connections.fetch_add(1) + 1;
+        if (n > impl_->limits.max_connections) {
+            release_one(impl_->connections);
             boost::system::error_code ignored;
             sock.close(ignored);
             continue;
         }
-        impl_->connections.fetch_add(1);
         beast::tcp_stream stream(std::move(sock));
         net::co_spawn(impl_->ioc,
                       serve_connection(std::move(stream), impl_->limits, impl_->router,
                                        impl_->shutting,
-                                       [impl = impl_.get()] { impl->connections.fetch_sub(1); }),
+                                       [impl = impl_.get()] { release_one(impl->connections); }),
                       net::detached);
     }
     co_return;
@@ -91,7 +104,11 @@ void App::serve() {
     impl_->work = std::make_unique<net::executor_work_guard<net::io_context::executor_type>>(
         net::make_work_guard(impl_->ioc));
     impl_->signals = std::make_unique<net::signal_set>(impl_->ioc, SIGINT, SIGTERM);
-    impl_->signals->async_wait([this](const boost::system::error_code &, int) { stop(); });
+    impl_->signals->async_wait([this](const boost::system::error_code &ec, int) {
+        if (!ec) {
+            stop();
+        }
+    });
     net::co_spawn(impl_->ioc, run(), net::detached);
     std::vector<std::thread> extras;
     extras.reserve(impl_->threads > 0 ? impl_->threads - 1 : 0);

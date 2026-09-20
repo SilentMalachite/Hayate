@@ -4,7 +4,7 @@
 
 namespace hayate {
 
-enum class HttpMethod { get, post };
+enum class HttpMethod { get, post, options, unknown };
 
 using Json = nlohmann::json;
 

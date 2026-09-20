@@ -4,3 +4,5 @@
 CMakeUserPresets.json
 compile_commands.json
 .DS_Store
+/.serena/
+/graphify-out/

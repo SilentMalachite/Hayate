@@ -39,7 +39,7 @@ int main() {
 - Phase 2: CORS / 静的ファイル / multipart / WS / SSE / gzip / レート制限
 - Phase 3: TLS / JWT 検証 / OpenAPI 生成 / 最小 metrics
 
-今の受け入れは Phase 1 まで。先の Phase は書けるが実装しない。
+今の受け入れは Phase 1 と CORS と静的ファイルとレート制限。multipart / WS / SSE / gzip は実装しない。
 
 ## やらないこと
 
@@ -90,7 +90,7 @@ Phase 1
 - スレッド: io_context あたり 1。`app.threads(n)` で複数。共有可変は strand か mutex を書いてから
 - 禁止: `new`/`delete`/`malloc`、生配列、ハンドラ境界をまたぐ例外、共有可変グローバル
 - 作業順: この SPEC → 公開ヘッダ → 失敗するテスト → 最小実装 → 全テスト → 停止
-- 正本は `docs/SPEC.md`。ER が参照する ARCHITECTURE は本 SPEC の『ルーティング』節。`.soujo/SPEC.md` は作らない
+- 正本は `docs/SPEC.md`。ER が参照する ARCHITECTURE は本 SPEC の『ルーティング』節。
 
 ## Phase 1 公開 API
 
@@ -133,7 +133,10 @@ using Middleware = std::function<asio::awaitable<Response>(Request&, Next)>;
 - `asio::awaitable<Response>(Request&)`
 - `Response(Request&)`（内部で awaitable に包む）
 
-onion: 入りは登録順 A→B、戻りは B→A。`next` を呼ばなければ短絡。404/405 は MW に入らない。
+onion: 入りは登録順 A→B、戻りは B→A。`next` を呼ばなければ短絡。
+App の `use()` は 404/405 を含む dispatch 全体を包む（CORS preflight とエラー応答にヘッダが要る）。
+`group` の MW はマッチしたルートにだけ付く。
+ハンドラと MW が投げた例外は `dispatch` が 500 に変換する。接続は閉じない。
 
 ### ルーティング
 
@@ -144,6 +147,10 @@ onion: 入りは登録順 A→B、戻りは B→A。`next` を呼ばなければ
 - パス無し 404。パスはあるがメソッド違い 405 + `Allow`
 - `group(prefix, fn)` は接頭辞連結。`//` を `/` に正規化する。末尾 `/` は消さない
 - `/a` と `/a/` は別ルート
+- パスはセグメントに分けてからパーセントデコードする。`%2F` は区切りにせずセグメント内の `/` になる
+- query はパーセントデコードし、`+` は空白として読む
+- 壊れた `%` 列は復号せずそのまま残す
+- `target()` と `path()` は生のまま。復号後が見えるのは `param()` と `query()`
 
 ### App 寿命
 
@@ -167,12 +174,20 @@ onion: 入りは登録順 A→B、戻りは B→A。`next` を呼ばなければ
 
 超過: header 431、body 413。read/write/idle 切れは接続を閉じる（応答を書けなければ書かない）。`max_connections` 超過の新規は accept せず切る。
 
+窓の切り分け: 1 本目のヘッダ読みは `read_timeout`。keep-alive で次の要求のヘッダを待つ間は `idle_timeout`。ヘッダが揃った後の本文読みは何本目でも `read_timeout`。
+
 ### JSON
 
 - `Response::json(Json)` は 200 / `application/json`
 - `Request::json()` は body を `Json` として読む。破損は `Error{code:"bad_json", http_status:400}`
 - `Request::json<T>()` は型不一致も同じ 400
 - Content-Type 検査は Phase 1 ではしない（body バイトだけ見る）
+
+### Response ヘッダ
+
+- `set_header(name, value)` は同名を置き換える（大文字小文字は無視）
+- `name` が HTTP token でなければ何もしない
+- `value` から CTL（`\r` `\n` を含む）を落とし、前後の空白を削る。ヘッダ注入を断つ
 
 ### Extension
 
@@ -184,3 +199,49 @@ T* Request::get() noexcept;       // 無ければ nullptr
 ```
 
 寿命は Request。ポインタを Response / App に保存しない。
+
+### CORS（Phase 2）
+
+```cpp
+app.use(hayate::mw::cors());
+app.use(hayate::mw::cors({.origin = "https://app.example"}));
+```
+
+- `hayate::mw::cors()` は Middleware。新しい公開型（Service 等）は足さない
+- ルート登録はこれまで通り GET / POST のみ。OPTIONS は preflight 用にフレームワークが扱う
+- `Origin` が無ければ CORS ヘッダを付けない
+- `Origin` がある GET/POST（および 404/405）: `Access-Control-Allow-Origin`（既定 `*`、設定があればその値）
+- `origin` が `*` 以外のときは `Vary: Origin` も付ける（共有キャッシュの取り違え防止）
+- `OPTIONS` + `Origin`: 204。`Allow-Origin` / `Allow-Methods` / `Allow-Headers`。`next` を呼ばない
+- 既定 methods: `GET, POST, OPTIONS`。既定 headers: `Content-Type, Authorization`
+
+### 静的ファイル（Phase 2）
+
+```cpp
+app.get("/assets/*path", hayate::files("public"));
+app.get("/assets/*path", hayate::files("public", 4u * 1024 * 1024));
+```
+
+- Handler 工場。`StaticFile` クラスは足さない（ER: Handler にぶら下がる）
+- 署名は `Handler files(std::string_view root, std::uint64_t max_bytes = 1048576)`
+- 全文をメモリに読む。`max_bytes` を超える実ファイルは 404（存在を漏らさない）
+- root の末尾 `/` は無視する。登録時に root が無くても同じ扱い
+- wildcard 名は `path`。空なら `index.html`
+- root の外（`..` / 絶対パス）は 404（存在を漏らさない）
+- 復号後のパスに NUL が入っていたら 404
+- 無いファイル・ディレクトリで `index.html` も無いときは 404
+- ディレクトリで `index.html` があればそれを返す
+- Content-Type は拡張子（`.html` `text/html`、`.css` `text/css`、`.js` `application/javascript`、`.json` `application/json`、`.txt` `text/plain`、その他 `application/octet-stream`）
+
+### レート制限（Phase 2）
+
+```cpp
+app.use(hayate::mw::rate_limit({.max = 60, .window = std::chrono::seconds(60)}));
+```
+
+- Middleware。固定窓。キーは `Request::peer()`（接続の remote IP。Connection.peer）
+- `peer` は accept 直後に 1 回だけ取り、その接続の全リクエストで同じ。取れなければ空で 1 つの窓に入る
+- 窓内で `max` を超えたら 429。`Retry-After` は窓の残り秒（切り上げ、最小 1）
+- 既定 `max` 60、`window` 60s
+- カウンタは MW が所有する mutex 付き map。グローバル禁止
+- 窓を過ぎたキーは次のリクエスト時に掃除する（map を無制限に太らせない）

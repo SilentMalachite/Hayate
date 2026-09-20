@@ -55,6 +55,7 @@ class Router {
     boost::asio::awaitable<Response> dispatch(Request &req) const;
 
   private:
+    boost::asio::awaitable<Response> dispatch_route(Request &req) const;
     friend class App;
     struct Impl;
     std::unique_ptr<Impl> impl_;

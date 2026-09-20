@@ -1,11 +1,12 @@
 # UML — Hayate（エージェント向け）
 
-正本は `.soujo/SPEC.md`。関係の正本は `docs/ER.md`。
-ここに無い型・インタフェース・基底クラスを足さない。Phase 2 / 3 は実装しない。
+正本は `docs/SPEC.md`。関係の正本は `docs/ER.md`。
+ここに無い型・インタフェース・基底クラスを足さない。
+受け入れは Phase 1 と CORS / 静的ファイル / レート制限まで。残りの Phase 2 / 3 は実装しない。
 
 図は Mermaid。クラス名は公開 API の識別子。
 
-## クラス図（Phase 1）
+## クラス図（Phase 1 + CORS / 静的ファイル / レート制限）
 
 ```mermaid
 classDiagram
@@ -72,6 +73,7 @@ classDiagram
         +query(key) string_view
         +header(name) string_view
         +param(name) string_view
+        +peer() string_view
         +body() span~byte~
     }
 
@@ -115,6 +117,17 @@ classDiagram
         +http_status : uint16
     }
 
+    class Cors {
+        +origin : string
+        +methods : string
+        +headers : string
+    }
+
+    class RateLimit {
+        +max : uint32
+        +window : ms
+    }
+
     App *-- Router : owns
     App *-- Listener : bind
     App *-- Limits : has
@@ -137,10 +150,17 @@ classDiagram
     Middleware ..> Response : may short-circuit
     Result~T~ o-- Error
     Error --> Response : status
+    Cors ..> Middleware : mw::cors() builds
+    RateLimit ..> Middleware : mw::rate_limit() builds
 ```
 
 合成 `*--` は所有。集約 `o--` は寿命が親に縛られるが、Request 配下の Header / Body は **非所有 view**。
 `Handler` と `Middleware` は利用者の関数オブジェクトでよい。仮想基底を先に切らない。
+`Listener` は独立した型ではない。App が持つ acceptor と `run()` の accept ループがその役。
+
+CORS / 静的ファイル / レート制限は型を増やさない。`Cors` と `RateLimit` は設定値の struct で、
+`mw::cors()` / `mw::rate_limit()` が Middleware を、`files(root, max_bytes)` が Handler を返す。
+`StaticFile` / `Service` のようなクラスは作らない。
 
 ## パッケージ
 
@@ -153,12 +173,15 @@ classDiagram
         Response
         Result
         Error
+        Cors
+        RateLimit
+        files
     }
     class src {
-        Listener
         Connection
         Route
         Limits
+        files impl
     }
     class src_detail {
         parser Beast
@@ -206,20 +229,22 @@ sequenceDiagram
         C-->>Client: 413 or 431
     else ok
         C->>R: dispatch Request
-        alt no path
-            R-->>C: 404
-        else method mismatch
-            R-->>C: 405 Allow
-        else match
-            R->>M: enter A then B
-            alt no next
-                M-->>C: Response
-            else next
-                M->>H: Request
-                H-->>M: Response
-                M->>M: leave B then A
-                M-->>C: Response
+        R->>M: enter A then B
+        alt no next
+            M-->>C: Response
+        else next
+            M->>R: match Route
+            alt no path
+                R-->>M: 404
+            else method mismatch
+                R-->>M: 405 Allow
+            else match
+                R->>H: Request
+                H-->>R: Response
+                R-->>M: Response
             end
+            M->>M: leave B then A
+            M-->>C: Response
         end
         C-->>Client: HTTP/1.1 response
     end
@@ -228,8 +253,12 @@ sequenceDiagram
 ## エージェント向け制約（図から外さないこと）
 
 - マクロで Route を登録しない
-- 例外は Handler / Middleware の境界を出ない。Asio/Beast は Error に変換
+- パスはセグメントに分けてから復号する。`param()` / `query()` は復号後、`path()` は生
+- `set_header` は token でない名前を捨て、値から CTL を落とす（ヘッダ注入を断つ）
+- 例外は Handler / Middleware の境界を出ない。Asio/Beast は Error に変換。
+  ハンドラの分は `dispatch_route`、MW の分は `dispatch` が受けて 500 にする
 - `std::expected` 禁止。`Result<T>` は 1 実装
 - Request の view を Response や App に保存しない
 - 共有可変グローバルを置かない。状態は App か Request の Extension
 - この図に無い基底（Service / Context / ApplicationBuilder）を足さない
+- App の `use` は 404/405 を含む dispatch 全体を包む。`group` の MW はマッチした Route だけ
