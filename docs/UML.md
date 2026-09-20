@@ -159,8 +159,9 @@ classDiagram
 `Listener` は独立した型ではない。App が持つ acceptor と `run()` の accept ループがその役。
 
 CORS / 静的ファイル / レート制限は型を増やさない。`Cors` と `RateLimit` は設定値の struct で、
-`mw::cors()` / `mw::rate_limit()` が Middleware を、`files(root, max_bytes)` が Handler を返す。
+`mw::cors()` / `mw::rate_limit()` が Middleware を、`files(root, max_bytes, io_threads)` が Handler を返す。
 `StaticFile` / `Service` のようなクラスは作らない。
+`files()` のワーカープールは返されたクロージャが持つ所有物で、図の要素にはしない。
 
 ## パッケージ
 
@@ -186,6 +187,7 @@ classDiagram
     class src_detail {
         parser Beast
         io Asio
+        offload Asio
     }
     class examples_hello
     class tests

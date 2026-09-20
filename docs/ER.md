@@ -199,7 +199,7 @@ sequenceDiagram
 | 機能 | 形 | ぶら下がる先 |
 |---|---|---|
 | CORS | `mw::cors(Cors)` | Middleware。preflight は 204 で短絡。固定 origin なら `Vary: Origin` |
-| 静的ファイル | `files(root, max_bytes)` | Handler。root 外・上限超過・不在はどれも 404 |
+| 静的ファイル | `files(root, max_bytes, io_threads)` | Handler。root 外・上限超過・不在はどれも 404。FS 呼び出しは `files()` 所有のワーカープール |
 | レート制限 | `mw::rate_limit(RateLimit)` | Middleware。固定窓、`Request::peer` キー |
 
 `Cors` と `RateLimit` は設定値の struct。`StaticFile` クラスは作らない。
