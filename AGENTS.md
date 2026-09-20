@@ -3,7 +3,8 @@
 Sol で **Hayate** を扱うときの指示。
 Claude Code 用の `CLAUDE.md` より短いのは意図的。写しにしない。規約を変えるときは両方を直す。
 
-正本: `docs/SPEC.md`（無ければ `.soujo/SPEC.md`）。図: `docs/ER.md` / `docs/UML.md`。
+正本: `docs/SPEC.md`。図: `docs/ER.md` / `docs/UML.md`。
+コード探索は Serena（`.serena/`）。構造・関係は Graphify（`graphify-out/`）。grep の前に両方。
 
 ## 相手
 
@@ -21,8 +22,7 @@ Claude Code 用の `CLAUDE.md` より短いのは意図的。写しにしない�
 
 - 頼まれた範囲だけ。広げない。別案は1文、実装は頼まれた通り。
 - 作業順: SPEC → 公開ヘッダ → 失敗するテスト → 最小実装 → 全テスト → 停止。
-- 今の受け入れは Phase 1 まで。Phase を跨がない。
-- `.soujo/PLAN.md` がある層では、その完了条件が「完了」。満たしたら止まる。
+- 今の受け入れは Phase 1 と CORS と静的ファイルとレート制限。multipart / WS / SSE / gzip は跨がない。
 - 読み方で成果物が割れるときだけ1問。それ以外は決めて進める。
 - レビューは見つけたものを全部表で出す。絞り込みはしない。
 

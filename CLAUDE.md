@@ -3,8 +3,10 @@
 Claude Code で **Hayate** を扱うときの指示。
 `AGENTS.md` は Sol 向けで**写しではない**。規約を変えるときは両方を直す。
 
-正本: `docs/SPEC.md`（無ければ `.soujo/SPEC.md`）。図は `docs/ER.md` / `docs/UML.md`。
+正本: `docs/SPEC.md`。図は `docs/ER.md` / `docs/UML.md`。
 チャットの合意はファイルに落とすまで存在しない。
+
+コード探索は Serena（clangd LSP、`.serena/`）。型・所有・経路は Graphify（`graphify-out/`、質問は `graphify query`）。grep / ファイル全読みの前に両方を使う。graph が無ければ先に `/graphify`。
 
 ## 相手
 
@@ -37,7 +39,7 @@ C++20 の HTTP フレームワーク兼サーバー。namespace `hayate`。
 5. 全テスト
 6. 停止
 
-Phase を飛ばさない。今の受け入れは Phase 1 まで。
+Phase を飛ばさない。今の受け入れは Phase 1 と CORS と静的ファイルとレート制限。multipart / WS / SSE / gzip は実装しない。
 
 ## 制約
 

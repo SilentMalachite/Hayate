@@ -1,6 +1,6 @@
 # UML — Hayate（エージェント向け）
 
-正本は `.soujo/SPEC.md`。関係の正本は `docs/ER.md`。
+正本は `docs/SPEC.md`。関係の正本は `docs/ER.md`。
 ここに無い型・インタフェース・基底クラスを足さない。Phase 2 / 3 は実装しない。
 
 図は Mermaid。クラス名は公開 API の識別子。
