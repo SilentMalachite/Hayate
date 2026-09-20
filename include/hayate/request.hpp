@@ -26,6 +26,7 @@ class Request {
     std::string_view query(std::string_view key) const noexcept;
     std::string_view header(std::string_view name) const noexcept;
     std::string_view param(std::string_view name) const noexcept;
+    std::string_view peer() const noexcept;
     std::span<const std::byte> body() const noexcept;
     Result<Json> json() const;
 
@@ -40,6 +41,7 @@ class Request {
     friend class Router;
 
     HttpMethod method_{HttpMethod::get};
+    std::string peer_;
     std::string target_;
     std::string path_;
     std::string body_;

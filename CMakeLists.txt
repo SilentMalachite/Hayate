@@ -39,6 +39,7 @@ add_library(hayate
     src/app.cpp
     src/listener.cpp
     src/connection.cpp
+    src/files.cpp
 )
 target_include_directories(hayate PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -80,6 +81,9 @@ if(HAYATE_BUILD_TESTS)
         tests/test_middleware.cpp
         tests/test_limits.cpp
         tests/test_shutdown.cpp
+        tests/test_cors.cpp
+        tests/test_static.cpp
+        tests/test_rate_limit.cpp
     )
     target_link_libraries(hayate_tests PRIVATE hayate GTest::gtest_main)
     include(GoogleTest)

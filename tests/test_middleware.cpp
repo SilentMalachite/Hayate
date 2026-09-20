@@ -4,6 +4,7 @@
 #include <gtest/gtest.h>
 #include <hayate/hayate.hpp>
 
+#include <stdexcept>
 #include <string>
 
 namespace http = boost::beast::http;
@@ -50,7 +51,7 @@ TEST(Mw, ShortCircuitSkipsLater) {
     EXPECT_EQ(trace, "A");
 }
 
-TEST(Mw, NotInvokedOn404) {
+TEST(Mw, InvokedOn404) {
     bool entered = false;
     TestServer srv([&](hayate::App &app) {
         app.use([&](hayate::Request &req, hayate::Next next) -> asio::awaitable<hayate::Response> {
@@ -61,7 +62,7 @@ TEST(Mw, NotInvokedOn404) {
     });
     auto r = http_call("127.0.0.1", srv.port(), http::verb::get, "/missing");
     EXPECT_EQ(r.status, 404);
-    EXPECT_FALSE(entered);
+    EXPECT_TRUE(entered);
 }
 
 TEST(Mw, ExtensionRoundtrip) {
@@ -77,4 +78,40 @@ TEST(Mw, ExtensionRoundtrip) {
     });
     auto r = http_call("127.0.0.1", srv.port(), http::verb::get, "/");
     EXPECT_EQ(r.body, "rid-1");
+}
+
+TEST(Mw, ThrowingMiddlewareIs500) {
+    TestServer srv([](hayate::App &app) {
+        app.use([](hayate::Request &, hayate::Next) -> asio::awaitable<hayate::Response> {
+            throw std::runtime_error("boom");
+            co_return hayate::Response::text("unreachable");
+        });
+        app.get("/", [](hayate::Request &) { return hayate::Response::text("ok"); });
+    });
+    auto r = http_call("127.0.0.1", srv.port(), http::verb::get, "/");
+    EXPECT_FALSE(r.error);
+    EXPECT_EQ(r.status, 500);
+}
+
+TEST(Mw, ThrowingAfterNextIs500) {
+    TestServer srv([](hayate::App &app) {
+        app.use([](hayate::Request &req, hayate::Next next) -> asio::awaitable<hayate::Response> {
+            co_await next(req);
+            throw std::runtime_error("boom");
+        });
+        app.get("/", [](hayate::Request &) { return hayate::Response::text("ok"); });
+    });
+    auto r = http_call("127.0.0.1", srv.port(), http::verb::get, "/");
+    EXPECT_FALSE(r.error);
+    EXPECT_EQ(r.status, 500);
+}
+
+TEST(Mw, ThrowingHandlerIs500) {
+    TestServer srv([](hayate::App &app) {
+        app.get("/",
+                [](hayate::Request &) -> hayate::Response { throw std::runtime_error("boom"); });
+    });
+    auto r = http_call("127.0.0.1", srv.port(), http::verb::get, "/");
+    EXPECT_FALSE(r.error);
+    EXPECT_EQ(r.status, 500);
 }

@@ -166,7 +166,19 @@ Response not_allowed(std::string allow) {
     return r;
 }
 
-std::string method_name(HttpMethod m) { return m == HttpMethod::post ? "POST" : "GET"; }
+std::string method_name(HttpMethod m) {
+    switch (m) {
+    case HttpMethod::post:
+        return "POST";
+    case HttpMethod::options:
+        return "OPTIONS";
+    case HttpMethod::get:
+        return "GET";
+    case HttpMethod::unknown:
+        return "";
+    }
+    return "";
+}
 
 } // namespace
 
@@ -211,6 +223,19 @@ Router &Router::group(std::string_view prefix, std::function<void(Router &)> fn)
 }
 
 boost::asio::awaitable<Response> Router::dispatch(Request &req) const {
+    Handler inner = [this](Request &r) -> boost::asio::awaitable<Response> {
+        co_return co_await dispatch_route(r);
+    };
+    Handler h = compose(impl_->mws, std::move(inner));
+    // 中の catch はハンドラだけを守る。MW 自身が投げた分はここで受けないと接続が落ちる。
+    try {
+        co_return co_await h(req);
+    } catch (...) {
+        co_return Response::from_error({"internal", "Internal Server Error", 500});
+    }
+}
+
+boost::asio::awaitable<Response> Router::dispatch_route(Request &req) const {
     const auto parts = split_path(req.path());
     const Impl::Route *best = nullptr;
     Match best_match;
@@ -250,9 +275,8 @@ boost::asio::awaitable<Response> Router::dispatch(Request &req) const {
     }
 
     req.params_ = std::move(best_match.params);
-    Handler h = compose(impl_->mws, best->handler);
     try {
-        co_return co_await h(req);
+        co_return co_await best->handler(req);
     } catch (...) {
         co_return Response::from_error({"internal", "Internal Server Error", 500});
     }

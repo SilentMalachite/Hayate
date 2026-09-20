@@ -31,6 +31,15 @@ TEST(Router, MethodMismatchIs405WithAllow) {
     EXPECT_NE(r.allow.find("GET"), std::string::npos);
 }
 
+TEST(Router, PutOnGetIs405) {
+    TestServer srv([](hayate::App &app) {
+        app.get("/only-get", [](hayate::Request &) { return hayate::Response::text("x"); });
+    });
+    auto r = http_call("127.0.0.1", srv.port(), http::verb::put, "/only-get");
+    EXPECT_EQ(r.status, 405);
+    EXPECT_NE(r.allow.find("GET"), std::string::npos);
+}
+
 TEST(Router, ParamCapture) {
     TestServer srv([](hayate::App &app) {
         app.get("/users/:id", [](hayate::Request &req) {
@@ -70,6 +79,28 @@ TEST(Router, GroupPrefix) {
     auto r = http_call("127.0.0.1", srv.port(), http::verb::get, "/api/ping");
     EXPECT_EQ(r.status, 200);
     EXPECT_EQ(r.body, "ok");
+}
+
+TEST(Router, QueryValue) {
+    TestServer srv([](hayate::App &app) {
+        app.get("/q", [](hayate::Request &req) {
+            return hayate::Response::text(std::string(req.query("id")));
+        });
+    });
+    auto r = http_call("127.0.0.1", srv.port(), http::verb::get, "/q?id=7");
+    EXPECT_EQ(r.status, 200);
+    EXPECT_EQ(r.body, "7");
+}
+
+TEST(Router, MissingQueryIsEmptyView) {
+    TestServer srv([](hayate::App &app) {
+        app.get("/q", [](hayate::Request &req) {
+            return hayate::Response::text(std::string(req.query("nope")));
+        });
+    });
+    auto r = http_call("127.0.0.1", srv.port(), http::verb::get, "/q");
+    EXPECT_EQ(r.status, 200);
+    EXPECT_EQ(r.body, "");
 }
 
 TEST(Router, MissingParamIsEmptyView) {

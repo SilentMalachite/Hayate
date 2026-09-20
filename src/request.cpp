@@ -41,6 +41,8 @@ std::string_view Request::header(std::string_view name) const noexcept {
     return {};
 }
 
+std::string_view Request::peer() const noexcept { return peer_; }
+
 std::string_view Request::param(std::string_view name) const noexcept {
     for (const auto &[k, v] : params_) {
         if (k == name) {
