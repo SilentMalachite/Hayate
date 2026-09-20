@@ -92,6 +92,7 @@ if(HAYATE_BUILD_TESTS)
         tests/test_tls.cpp
         tests/test_metrics.cpp
         tests/test_jwt.cpp
+        tests/test_openapi.cpp
     )
     target_include_directories(hayate_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
     target_link_libraries(hayate_tests PRIVATE hayate GTest::gtest_main)

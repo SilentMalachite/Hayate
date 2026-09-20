@@ -108,6 +108,11 @@ classDiagram
         +json : Json
     }
 
+    class OpenApiInfo {
+        +title : string
+        +version : string
+    }
+
     class Header {
         +name : string
         +value : string_view
@@ -178,6 +183,7 @@ classDiagram
     Tls ..> App : app.tls() configures
     Cors ..> Middleware : mw::cors() builds
     Jwt ..> Middleware : mw::jwt() builds
+    OpenApiInfo ..> App : openapi() reads routes
     Claims ..> Extension : stored in Request
     RateLimit ..> Middleware : mw::rate_limit() builds
 ```

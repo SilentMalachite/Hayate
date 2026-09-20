@@ -2,6 +2,7 @@
 
 #include <hayate/http.hpp>
 #include <hayate/limits.hpp>
+#include <hayate/openapi.hpp>
 #include <hayate/router.hpp>
 #include <hayate/tls.hpp>
 
@@ -10,8 +11,10 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 namespace hayate {
 
@@ -56,6 +59,9 @@ class App {
 
   private:
     friend Handler metrics(App &);
+    friend Json openapi(const App &, OpenApiInfo);
+
+    std::vector<std::pair<HttpMethod, std::string>> route_table() const;
 
     void add_route(HttpMethod method, std::string_view path, Handler handler);
     void add_middleware(Middleware mw);

@@ -10,6 +10,7 @@ namespace asio = boost::asio;
 #include <hayate/http.hpp>
 #include <hayate/jwt.hpp>
 #include <hayate/limits.hpp>
+#include <hayate/openapi.hpp>
 #include <hayate/rate_limit.hpp>
 #include <hayate/request.hpp>
 #include <hayate/response.hpp>
