@@ -58,7 +58,12 @@ Handler files(std::string_view root, std::uint64_t max_bytes) {
     }
     return [root_path = std::move(root_path),
             max_bytes](Request &req) -> boost::asio::awaitable<Response> {
-        const fs::path rel{std::string(req.param("path"))};
+        const std::string raw(req.param("path"));
+        // NUL があると OS は手前で切る。contained() が見る名前と開く名前がずれる。
+        if (raw.find('\0') != std::string::npos) {
+            co_return Response::from_error({"not_found", "Not Found", 404});
+        }
+        const fs::path rel{raw};
         if (rel.is_absolute()) {
             co_return Response::from_error({"not_found", "Not Found", 404});
         }

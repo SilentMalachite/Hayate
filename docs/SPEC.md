@@ -147,6 +147,10 @@ App の `use()` は 404/405 を含む dispatch 全体を包む（CORS preflight 
 - パス無し 404。パスはあるがメソッド違い 405 + `Allow`
 - `group(prefix, fn)` は接頭辞連結。`//` を `/` に正規化する。末尾 `/` は消さない
 - `/a` と `/a/` は別ルート
+- パスはセグメントに分けてからパーセントデコードする。`%2F` は区切りにせずセグメント内の `/` になる
+- query はパーセントデコードし、`+` は空白として読む
+- 壊れた `%` 列は復号せずそのまま残す
+- `target()` と `path()` は生のまま。復号後が見えるのは `param()` と `query()`
 
 ### App 寿命
 
@@ -178,6 +182,12 @@ App の `use()` は 404/405 を含む dispatch 全体を包む（CORS preflight 
 - `Request::json()` は body を `Json` として読む。破損は `Error{code:"bad_json", http_status:400}`
 - `Request::json<T>()` は型不一致も同じ 400
 - Content-Type 検査は Phase 1 ではしない（body バイトだけ見る）
+
+### Response ヘッダ
+
+- `set_header(name, value)` は同名を置き換える（大文字小文字は無視）
+- `name` が HTTP token でなければ何もしない
+- `value` から CTL（`\r` `\n` を含む）を落とし、前後の空白を削る。ヘッダ注入を断つ
 
 ### Extension
 
@@ -218,6 +228,7 @@ app.get("/assets/*path", hayate::files("public", 4u * 1024 * 1024));
 - root の末尾 `/` は無視する。登録時に root が無くても同じ扱い
 - wildcard 名は `path`。空なら `index.html`
 - root の外（`..` / 絶対パス）は 404（存在を漏らさない）
+- 復号後のパスに NUL が入っていたら 404
 - 無いファイル・ディレクトリで `index.html` も無いときは 404
 - ディレクトリで `index.html` があればそれを返す
 - Content-Type は拡張子（`.html` `text/html`、`.css` `text/css`、`.js` `application/javascript`、`.json` `application/json`、`.txt` `text/plain`、その他 `application/octet-stream`）
@@ -229,6 +240,7 @@ app.use(hayate::mw::rate_limit({.max = 60, .window = std::chrono::seconds(60)}))
 ```
 
 - Middleware。固定窓。キーは `Request::peer()`（接続の remote IP。Connection.peer）
+- `peer` は accept 直後に 1 回だけ取り、その接続の全リクエストで同じ。取れなければ空で 1 つの窓に入る
 - 窓内で `max` を超えたら 429。`Retry-After` は窓の残り秒（切り上げ、最小 1）
 - 既定 `max` 60、`window` 60s
 - カウンタは MW が所有する mutex 付き map。グローバル禁止

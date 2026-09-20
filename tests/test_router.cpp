@@ -112,3 +112,76 @@ TEST(Router, MissingParamIsEmptyView) {
     auto r = http_call("127.0.0.1", srv.port(), http::verb::get, "/x");
     EXPECT_EQ(r.body, "");
 }
+
+TEST(Router, ParamIsPercentDecoded) {
+    TestServer srv([](hayate::App &app) {
+        app.get("/u/:id", [](hayate::Request &req) {
+            return hayate::Response::text(std::string(req.param("id")));
+        });
+    });
+    auto r = http_call("127.0.0.1", srv.port(), http::verb::get, "/u/a%20b%21");
+    EXPECT_EQ(r.status, 200);
+    EXPECT_EQ(r.body, "a b!");
+}
+
+TEST(Router, EncodedSlashStaysInOneSegment) {
+    TestServer srv([](hayate::App &app) {
+        app.get("/u/:id", [](hayate::Request &req) {
+            return hayate::Response::text(std::string(req.param("id")));
+        });
+    });
+    auto r = http_call("127.0.0.1", srv.port(), http::verb::get, "/u/a%2Fb");
+    EXPECT_EQ(r.status, 200);
+    EXPECT_EQ(r.body, "a/b");
+}
+
+TEST(Router, BrokenPercentStaysLiteral) {
+    TestServer srv([](hayate::App &app) {
+        app.get("/u/:id", [](hayate::Request &req) {
+            return hayate::Response::text(std::string(req.param("id")));
+        });
+    });
+    auto r = http_call("127.0.0.1", srv.port(), http::verb::get, "/u/a%zz");
+    EXPECT_EQ(r.status, 200);
+    EXPECT_EQ(r.body, "a%zz");
+}
+
+TEST(Router, QueryIsPercentDecodedWithPlus) {
+    TestServer srv([](hayate::App &app) {
+        app.get("/q", [](hayate::Request &req) {
+            return hayate::Response::text(std::string(req.query("k")));
+        });
+    });
+    auto r = http_call("127.0.0.1", srv.port(), http::verb::get, "/q?k=a+b%21");
+    EXPECT_EQ(r.status, 200);
+    EXPECT_EQ(r.body, "a b!");
+}
+
+TEST(Router, HeaderValueCannotInject) {
+    TestServer srv([](hayate::App &app) {
+        app.get("/", [](hayate::Request &) {
+            auto res = hayate::Response::text("ok");
+            res.set_header("X-Evil", "a\r\nX-Injected: 1");
+            return res;
+        });
+    });
+    auto r = http_call("127.0.0.1", srv.port(), http::verb::get, "/", {}, {},
+                       std::chrono::seconds(2), {}, {"X-Injected", "X-Evil"});
+    EXPECT_EQ(r.status, 200) << r.error_message;
+    EXPECT_EQ(r.extra["X-Injected"], "");
+    EXPECT_EQ(r.extra["X-Evil"], "aX-Injected: 1");
+}
+
+TEST(Router, InvalidHeaderNameIsIgnored) {
+    TestServer srv([](hayate::App &app) {
+        app.get("/", [](hayate::Request &) {
+            auto res = hayate::Response::text("ok");
+            res.set_header("Bad Name", "x");
+            return res;
+        });
+    });
+    auto r = http_call("127.0.0.1", srv.port(), http::verb::get, "/", {}, {},
+                       std::chrono::seconds(2), {}, {"Bad Name"});
+    EXPECT_EQ(r.status, 200) << r.error_message;
+    EXPECT_EQ(r.extra["Bad Name"], "");
+}

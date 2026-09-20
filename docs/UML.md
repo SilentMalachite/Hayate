@@ -253,6 +253,8 @@ sequenceDiagram
 ## エージェント向け制約（図から外さないこと）
 
 - マクロで Route を登録しない
+- パスはセグメントに分けてから復号する。`param()` / `query()` は復号後、`path()` は生
+- `set_header` は token でない名前を捨て、値から CTL を落とす（ヘッダ注入を断つ）
 - 例外は Handler / Middleware の境界を出ない。Asio/Beast は Error に変換。
   ハンドラの分は `dispatch_route`、MW の分は `dispatch` が受けて 500 にする
 - `std::expected` 禁止。`Result<T>` は 1 実装

@@ -1,4 +1,5 @@
 #include "connection.hpp"
+#include "detail/percent.hpp"
 
 #include <hayate/request.hpp>
 #include <hayate/response.hpp>
@@ -6,6 +7,7 @@
 #include <algorithm>
 #include <atomic>
 #include <memory>
+#include <string>
 #include <utility>
 
 namespace hayate {
@@ -32,7 +34,12 @@ class Connection : public std::enable_shared_from_this<Connection> {
     Connection(beast::tcp_stream stream, Limits limits, Router &router, std::atomic<bool> &shutting,
                std::function<void()> on_done)
         : stream_(std::move(stream)), limits_(limits), router_(router), shutting_(shutting),
-          on_done_(std::move(on_done)) {}
+          on_done_(std::move(on_done)) {
+        // accept 直後なら必ず取れる。リクエストごとに引くと切断済みで空になる。
+        boost::system::error_code pec;
+        auto ep = stream_.socket().remote_endpoint(pec);
+        peer_ = pec ? std::string{} : ep.address().to_string();
+    }
 
     ~Connection() { finish(); }
 
@@ -60,10 +67,10 @@ class Connection : public std::enable_shared_from_this<Connection> {
                 std::string k;
                 std::string v;
                 if (eq == std::string_view::npos) {
-                    k = std::string(pair);
+                    k = detail::percent_decode(pair, true);
                 } else {
-                    k = std::string(pair.substr(0, eq));
-                    v = std::string(pair.substr(eq + 1));
+                    k = detail::percent_decode(pair.substr(0, eq), true);
+                    v = detail::percent_decode(pair.substr(eq + 1), true);
                 }
                 dst.query_.emplace_back(std::move(k), std::move(v));
                 if (amp == std::string_view::npos) {
@@ -79,9 +86,7 @@ class Connection : public std::enable_shared_from_this<Connection> {
         dst.body_ = src.body();
         dst.params_.clear();
         dst.ext_.clear();
-        boost::system::error_code pec;
-        auto ep = stream_.socket().remote_endpoint(pec);
-        dst.peer_ = pec ? std::string{} : ep.address().to_string();
+        dst.peer_ = peer_;
     }
 
     net::awaitable<void> run() {
@@ -160,6 +165,7 @@ class Connection : public std::enable_shared_from_this<Connection> {
 
     beast::tcp_stream stream_;
     beast::flat_buffer buffer_;
+    std::string peer_;
     Limits limits_;
     Router &router_;
     std::atomic<bool> &shutting_;

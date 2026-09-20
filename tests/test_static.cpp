@@ -136,3 +136,44 @@ TEST(Static, TrailingSlashRootCreatedLater) {
     EXPECT_EQ(r.status, 200);
     EXPECT_EQ(r.body, "hi");
 }
+
+TEST(Static, PercentEncodedFileName) {
+    StaticDir root;
+    {
+        std::ofstream out(root.dir / "my file.txt");
+        out << "hi";
+    }
+    TestServer srv(
+        [&](hayate::App &app) { app.get("/assets/*path", hayate::files(root.dir.string())); });
+    auto r = http_call("127.0.0.1", srv.port(), http::verb::get, "/assets/my%20file.txt");
+    EXPECT_EQ(r.status, 200);
+    EXPECT_EQ(r.body, "hi");
+}
+
+TEST(Static, EncodedTraversalIs404) {
+    StaticDir root;
+    const auto secret = root.dir.parent_path() / ("hayate_secret_" + root.dir.filename().string());
+    {
+        std::ofstream out(secret);
+        out << "secret";
+    }
+    TestServer srv(
+        [&](hayate::App &app) { app.get("/assets/*path", hayate::files(root.dir.string())); });
+    auto r = http_call("127.0.0.1", srv.port(), http::verb::get,
+                       "/assets/..%2F" + secret.filename().string());
+    EXPECT_EQ(r.status, 404) << r.body;
+    std::error_code ec;
+    fs::remove(secret, ec);
+}
+
+TEST(Static, NulInPathIs404) {
+    StaticDir root;
+    {
+        std::ofstream out(root.dir / "hello.txt");
+        out << "hi";
+    }
+    TestServer srv(
+        [&](hayate::App &app) { app.get("/assets/*path", hayate::files(root.dir.string())); });
+    auto r = http_call("127.0.0.1", srv.port(), http::verb::get, "/assets/hello.txt%00.png");
+    EXPECT_EQ(r.status, 404) << r.body;
+}

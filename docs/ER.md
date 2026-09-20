@@ -149,11 +149,11 @@ erDiagram
 | Router | 1—* | Router | 親が所有 | `group`。接頭辞は連結、`//` を正規化 |
 | Route | 1—1 | Handler | Route が所有 | `awaitable<Response>(Request&)`。同期は内部で包む |
 | Listener | 1—* | Connection | Listener が生成、Conn が自己寿命 | 上限超過は新規拒否 |
-| Connection | 1—* | Request | Conn が所有、Req 寿命 | keep-alive で連続。view の根拠。`peer` は Conn の remote IP の写し |
-| Request | 1—* | Header / Query / PathParam | 非所有 view | 欠けた param は空 view |
+| Connection | 1—* | Request | Conn が所有、Req 寿命 | keep-alive で連続。view の根拠。`peer` は accept 時に 1 回取る Conn の remote IP の写し |
+| Request | 1—* | Header / Query / PathParam | 非所有 view | 欠けた param は空 view。`param` / `query` は復号済み、`path` は生 |
 | Request | 0—1 | Body | 非所有 view | 超過は 413。JSON 破損・型不一致は 400 |
 | Request | 0—* | Extension | Req 寿命の型付きスロット | グローバル状態の代替。最小 |
-| Handler | 1—1 | Response | 値で返す | 工場は `text` / `json` / `no_content` |
+| Handler | 1—1 | Response | 値で返す | 工場は `text` / `json` / `no_content`。`set_header` は名前を token 検査し値の CTL を落とす |
 | Middleware | 0—1 | Response | next を呼ばなければ短絡 | |
 | Result | 0—1 | Error | 値 | `std::expected` 禁止。一方の実装だけ |
 | Error | 1—1 | Status | 値 | ハンドラ境界で例外を漏らさない |

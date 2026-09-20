@@ -5,6 +5,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <map>
 #include <string>
 #include <system_error>
 #include <utility>
@@ -20,6 +21,7 @@ struct HttpCall {
     std::string allow_headers;
     std::string retry_after;
     std::string vary;
+    std::map<std::string, std::string> extra;
     std::error_code error;
     std::string error_message;
 };
@@ -27,7 +29,8 @@ struct HttpCall {
 inline HttpCall http_call(std::string host, std::uint16_t port, boost::beast::http::verb method,
                           std::string target, std::string body = {}, std::string content_type = {},
                           std::chrono::milliseconds timeout = std::chrono::seconds(2),
-                          std::vector<std::pair<std::string, std::string>> headers = {}) {
+                          std::vector<std::pair<std::string, std::string>> headers = {},
+                          std::vector<std::string> want = {}) {
     namespace net = boost::asio;
     namespace http = boost::beast::http;
     HttpCall out;
@@ -63,6 +66,9 @@ inline HttpCall http_call(std::string host, std::uint16_t port, boost::beast::ht
         out.allow_headers = std::string(res[http::field::access_control_allow_headers]);
         out.retry_after = std::string(res[http::field::retry_after]);
         out.vary = std::string(res[http::field::vary]);
+        for (const auto &name : want) {
+            out.extra[name] = std::string(res[name]);
+        }
         boost::system::error_code ec;
         stream.socket().shutdown(net::ip::tcp::socket::shutdown_both, ec);
     } catch (const std::exception &ex) {

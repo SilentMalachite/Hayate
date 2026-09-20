@@ -1,3 +1,5 @@
+#include "detail/percent.hpp"
+
 #include <hayate/router.hpp>
 
 #include <algorithm>
@@ -236,7 +238,11 @@ boost::asio::awaitable<Response> Router::dispatch(Request &req) const {
 }
 
 boost::asio::awaitable<Response> Router::dispatch_route(Request &req) const {
-    const auto parts = split_path(req.path());
+    // 分けてから復号する。先に復号すると %2F が区切りになって別のパスに化ける。
+    auto parts = split_path(req.path());
+    for (auto &p : parts) {
+        p = detail::percent_decode(p, false);
+    }
     const Impl::Route *best = nullptr;
     Match best_match;
     bool path_ok = false;
