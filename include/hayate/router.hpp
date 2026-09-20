@@ -8,9 +8,11 @@
 
 #include <functional>
 #include <memory>
+#include <string>
 #include <string_view>
 #include <type_traits>
 #include <utility>
+#include <vector>
 
 namespace hayate {
 
@@ -56,6 +58,7 @@ class Router {
 
   private:
     boost::asio::awaitable<Response> dispatch_route(Request &req) const;
+    std::vector<std::pair<HttpMethod, std::string>> route_table() const;
     friend class App;
     struct Impl;
     std::unique_ptr<Impl> impl_;

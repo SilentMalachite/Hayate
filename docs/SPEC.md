@@ -89,6 +89,15 @@ Phase 3（TLS）
 - 読めない証明書 / 鍵で `tls()` が投げる
 - 静的ファイルのストリーミングが TLS 上でも `Content-Length` ちょうどで届く
 
+Phase 3（OpenAPI 生成）
+
+- 登録した全ルートが `paths` に出る
+- `:id` が `parameters` になる（`in: path`、`required: true`、`type: string`）
+- 同じパスの GET と POST が 1 つの path 項目にまとまる
+- 登録していないメソッドのキーが出ない
+- ワイルドカードの parameter に `x-hayate-wildcard` が付く
+- `group()` の prefix が付いた形で出る
+
 Phase 3（JWT 検証）
 
 - 有効なトークンが 200 で、ハンドラが `Claims` から `sub` を読める
@@ -250,6 +259,28 @@ app.tls({.cert_file = "server.pem", .key_file = "server.key"})
 - 終了は TLS shutdown → socket shutdown の順
 - sslv2 / sslv3 / tlsv1 / tlsv1.1 を無効化する。最低 TLS 1.2
 - `Request::peer()` は TLS でも accept 時の remote IP
+
+### OpenAPI 生成（Phase 3）
+
+```cpp
+app.get("/openapi.json", [&app](hayate::Request &) {
+    return hayate::Response::json(hayate::openapi(app, {.title = "my api"}));
+});
+```
+
+- `Json hayate::openapi(const App&, OpenApiInfo = {})`。Handler も Middleware も返さない
+- 新しい公開型は設定値 struct `OpenApiInfo{title, version}` だけ
+- 出るのは `openapi` / `info` / `paths` の 3 つ。`"openapi": "3.1.0"`
+- 情報源は登録済みルートの `pattern` と `method` だけ。
+  **body / response のスキーマは出さない**（Router が型情報を持っていない）
+- `:name` → `{name}`、`*name` → `{name}` + `x-hayate-wildcard: true`
+  （OpenAPI の `{}` は本来 `/` を含まないので、違いを機械可読な形で残す）
+- path パラメータは `in: path` / `required: true` / `schema: {type: string}`
+- 同じパスの GET と POST は 1 つの path 項目にまとまる
+- 各 operation の `responses` は `default` 1 つだけ。ステータスを知らないので創作しない
+- `group()` の prefix は畳み込まれた形（`/api/users`）で出る
+- 文書の配り方は決めない。ルートに載せるのは利用者の仕事
+- スキーマ推論 / `summary` / `tags` / `servers` / 認証定義 / YAML 出力はしない
 
 ### JWT 検証（Phase 3）
 

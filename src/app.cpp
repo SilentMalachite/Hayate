@@ -1,6 +1,7 @@
 #include "connection.hpp"
 #include "detail/asio.hpp"
 #include "detail/metrics.hpp"
+#include "detail/openapi.hpp"
 
 #include <hayate/app.hpp>
 
@@ -8,6 +9,7 @@
 #include <csignal>
 #include <cstddef>
 #include <cstdint>
+#include <string>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -179,6 +181,14 @@ Handler metrics(App &app) {
         res.set_header("Content-Type", "text/plain; version=0.0.4; charset=utf-8");
         co_return res;
     };
+}
+
+std::vector<std::pair<HttpMethod, std::string>> App::route_table() const {
+    return impl_->router.route_table();
+}
+
+Json openapi(const App &app, OpenApiInfo info) {
+    return detail::build_openapi(app.route_table(), info);
 }
 
 void App::add_route(HttpMethod method, std::string_view path, Handler handler) {

@@ -228,6 +228,15 @@ Router &Router::group(std::string_view prefix, std::function<void(Router &)> fn)
     return *this;
 }
 
+std::vector<std::pair<HttpMethod, std::string>> Router::route_table() const {
+    std::vector<std::pair<HttpMethod, std::string>> out;
+    out.reserve(impl_->routes.size());
+    for (const auto &r : impl_->routes) {
+        out.emplace_back(r.method, r.pattern);
+    }
+    return out;
+}
+
 boost::asio::awaitable<Response> Router::dispatch(Request &req) const {
     Handler inner = [this](Request &r) -> boost::asio::awaitable<Response> {
         co_return co_await dispatch_route(r);
