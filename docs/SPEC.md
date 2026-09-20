@@ -89,6 +89,13 @@ Phase 3（TLS）
 - 読めない証明書 / 鍵で `tls()` が投げる
 - 静的ファイルのストリーミングが TLS 上でも `Content-Length` ちょうどで届く
 
+Phase 3（metrics）
+
+- 2 本投げてから読むと `requests_total` が 2
+- 404 を投げると `4xx` が 1 増え、`5xx` は増えない
+- `max_connections` 超過の接続で `rejected_total` が 1 増える
+- 1 接続につき `accepted_total` が 1 増える
+
 ## 技術判断
 
 - 言語: C++20 厳守。`std::expected` は使わない
@@ -233,6 +240,30 @@ app.tls({.cert_file = "server.pem", .key_file = "server.key"})
 - 終了は TLS shutdown → socket shutdown の順
 - sslv2 / sslv3 / tlsv1 / tlsv1.1 を無効化する。最低 TLS 1.2
 - `Request::peer()` は TLS でも accept 時の remote IP
+
+### metrics（Phase 3）
+
+```cpp
+app.get("/metrics", hayate::metrics(app));
+```
+
+- Handler 工場。`Metrics` / `Service` のようなクラスは作らない
+- カウンタは App が 1 つ持つ。App をまたいで共有しない。グローバルにしない
+- `Content-Type` は `text/plain; version=0.0.4; charset=utf-8`
+- 出す系列
+
+```
+hayate_connections_accepted_total   counter
+hayate_connections_rejected_total   counter  max_connections 超過で拒否した数
+hayate_connections_open             gauge    いま開いている接続
+hayate_requests_total               counter  応答を書いた数
+hayate_responses_total{class="Nxx"} counter  1xx..5xx の 5 本
+```
+
+- `requests_total` は応答を書いた数。上限超過の 413 / 431 も数える（Router に届かなくても応答は返る）
+- `responses_total` のクラスは `status / 100`。範囲外は数えない
+- `/metrics` 自身は自分の出力に入らない。応答を書く直前に数えるので次のスクレイプに出る
+- ヒストグラム / per-route ラベル / OpenTelemetry は出さない
 
 ### CORS（Phase 2）
 

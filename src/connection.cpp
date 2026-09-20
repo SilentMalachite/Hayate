@@ -83,10 +83,10 @@ std::optional<Error> limit_error(const boost::system::error_code &ec) {
 template <typename Stream>
 class Connection : public std::enable_shared_from_this<Connection<Stream>> {
   public:
-    Connection(Stream stream, Limits limits, Router &router, std::atomic<bool> &shutting,
-               std::function<void()> on_done)
-        : stream_(std::move(stream)), limits_(limits), router_(router), shutting_(shutting),
-          on_done_(std::move(on_done)) {
+    Connection(Stream stream, Limits limits, Router &router, detail::Counters &counters,
+               std::atomic<bool> &shutting, std::function<void()> on_done)
+        : stream_(std::move(stream)), limits_(limits), router_(router), counters_(counters),
+          shutting_(shutting), on_done_(std::move(on_done)) {
         // accept 直後なら必ず取れる。リクエストごとに引くと切断済みで空になる。
         boost::system::error_code pec;
         auto ep = lowest(stream_).socket().remote_endpoint(pec);
@@ -235,6 +235,7 @@ class Connection : public std::enable_shared_from_this<Connection<Stream>> {
                 }
                 if (ec) {
                     if (const auto over = limit_error(ec)) {
+                        detail::count_response(counters_, over->http_status);
                         auto out = to_beast(Response::from_error(*over), 11, false);
                         lowest(stream_).expires_after(limits_.write_timeout);
                         co_await http::async_write(stream_, out, net::as_tuple);
@@ -244,6 +245,7 @@ class Connection : public std::enable_shared_from_this<Connection<Stream>> {
                 Request req;
                 load(req, parser.get());
                 Response res = co_await router_.dispatch(req);
+                detail::count_response(counters_, res.status());
                 bool keep = parser.get().keep_alive() && !shutting_.load();
                 if (res.is_file()) {
                     const bool ok = co_await write_file(res, parser.get().version(), keep);
@@ -279,24 +281,25 @@ class Connection : public std::enable_shared_from_this<Connection<Stream>> {
     std::string peer_;
     Limits limits_;
     Router &router_;
+    detail::Counters &counters_;
     std::atomic<bool> &shutting_;
     std::function<void()> on_done_;
     std::atomic<bool> finished_{false};
 };
 
 net::awaitable<void> serve_connection(beast::tcp_stream stream, const Limits &limits,
-                                      Router &router, std::atomic<bool> &shutting,
-                                      std::function<void()> on_done) {
-    auto conn = std::make_shared<Connection<beast::tcp_stream>>(std::move(stream), limits, router,
-                                                                shutting, std::move(on_done));
+                                      Router &router, detail::Counters &counters,
+                                      std::atomic<bool> &shutting, std::function<void()> on_done) {
+    auto conn = std::make_shared<Connection<beast::tcp_stream>>(
+        std::move(stream), limits, router, counters, shutting, std::move(on_done));
     co_await conn->run();
 }
 
 net::awaitable<void> serve_connection(detail::tls_stream stream, const Limits &limits,
-                                      Router &router, std::atomic<bool> &shutting,
-                                      std::function<void()> on_done) {
-    auto conn = std::make_shared<Connection<detail::tls_stream>>(std::move(stream), limits, router,
-                                                                 shutting, std::move(on_done));
+                                      Router &router, detail::Counters &counters,
+                                      std::atomic<bool> &shutting, std::function<void()> on_done) {
+    auto conn = std::make_shared<Connection<detail::tls_stream>>(
+        std::move(stream), limits, router, counters, shutting, std::move(on_done));
     co_await conn->run();
 }
 
