@@ -39,7 +39,7 @@ int main() {
 - Phase 2: CORS / 静的ファイル / multipart / WS / SSE / gzip / レート制限
 - Phase 3: TLS / JWT 検証 / OpenAPI 生成 / 最小 metrics / 静的ファイルのストリーミング送出
 
-今の受け入れは Phase 1 と CORS と静的ファイルとレート制限。multipart / WS / SSE / gzip は実装しない。
+今の受け入れは Phase 1 と CORS と静的ファイルとレート制限と静的ファイルのストリーミング送出。multipart / WS / SSE / gzip は実装しない。
 
 ## やらないこと
 
@@ -73,6 +73,14 @@ Phase 1
 - hello が公開ヘッダだけに依存する
 - debug + ASan で新規リーク・UAF が無い
 - 頼んでいないファイルが diff に無い
+
+Phase 3（静的ファイルのストリーミング送出）
+
+- ファイルサイズに関わらず 1 応答のメモリが 64 KiB で頭打ちになる
+- `Content-Length` が実際の送出バイト数と一致し、`Transfer-Encoding: chunked` が付かない
+- ストリーミング応答の後で keep-alive の次の要求が通る
+- 0 バイトのファイルが 200 / `Content-Length: 0` で返る
+- 既定引数で `max_bytes` の上限が掛からない
 
 ## 技術判断
 
@@ -216,7 +224,7 @@ app.use(hayate::mw::cors({.origin = "https://app.example"}));
 - `OPTIONS` + `Origin`: 204。`Allow-Origin` / `Allow-Methods` / `Allow-Headers`。`next` を呼ばない
 - 既定 methods: `GET, POST, OPTIONS`。既定 headers: `Content-Type, Authorization`
 
-### 静的ファイル（Phase 2）
+### 静的ファイル（Phase 2 / 送出は Phase 3）
 
 ```cpp
 app.get("/assets/*path", hayate::files("public"));
@@ -225,8 +233,8 @@ app.get("/assets/*path", hayate::files("public", 4u * 1024 * 1024, 4));
 ```
 
 - Handler 工場。`StaticFile` クラスは足さない（ER: Handler にぶら下がる）
-- 署名は `Handler files(std::string_view root, std::uint64_t max_bytes = 1048576, std::uint32_t io_threads = 2)`
-- 全文をメモリに読む。`max_bytes` を超える実ファイルは 404（存在を漏らさない）
+- 署名は `Handler files(std::string_view root, std::uint64_t max_bytes = 0, std::uint32_t io_threads = 2)`
+- `max_bytes` は配布上限。既定 `0` は無制限。`0` 以外でそれを超える実ファイルは 404（存在を漏らさない）
 - root の末尾 `/` は無視する。登録時に root が無くても同じ扱い
 - wildcard 名は `path`。空なら `index.html`
 - root の外（`..` / 絶対パス）は 404（存在を漏らさない）
@@ -240,7 +248,12 @@ I/O モデル:
 - 正規化・stat・open・read は `files()` が所有するワーカープールで行う。io スレッドは filesystem を待たない
 - プールは `files()` 1 回につき 1 つ、`io_threads` 本。既定 2。`0` は 1 に切り上げる
 - 同時に走る読みは `io_threads` 本まで。溢れた分はプールのキューで待つ
-- `max_bytes` は 1 応答あたりのメモリ上限。全体の上限ではない（in-flight 数 × `max_bytes`）。全体を縛るストリーミング送出は Phase 3
+- ハンドラはバイトを読まない。`Response` に `FileSource`（path / size / プール）を載せ、Connection が送出する
+- 本体はサイズに関係なく常に 64 KiB ずつ送る。1 応答のメモリはファイルサイズに依らず 64 KiB
+- `Content-Length` を立てる。chunked encoding は使わない
+- 送るのは stat した `size` まで。stat 後に伸びても増やさない
+- ヘッダ送出後に読みが失敗したら（縮んだ・消えた）その場で接続を閉じる。status はもう直せない
+- `write_timeout` はチャンクごとに張り直す。大きいファイルの総送出時間は縛らない
 - 読みが `read_timeout` を超えた接続は既存のタイムアウト窓どおり閉じる（応答は書かない）
 
 ### レート制限（Phase 2）
