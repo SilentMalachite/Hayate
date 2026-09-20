@@ -1,0 +1,46 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {"major": 3, "minor": 28, "patch": 0},
+  "configurePresets": [
+    {
+      "name": "debug",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "HAYATE_ENABLE_SANITIZERS": "ON",
+        "HAYATE_BUILD_TESTS": "ON",
+        "HAYATE_BUILD_EXAMPLES": "ON"
+      }
+    },
+    {
+      "name": "release",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "HAYATE_ENABLE_SANITIZERS": "OFF",
+        "HAYATE_BUILD_TESTS": "OFF",
+        "HAYATE_BUILD_EXAMPLES": "ON"
+      }
+    },
+    {
+      "name": "test",
+      "inherits": "debug",
+      "binaryDir": "${sourceDir}/build/test"
+    }
+  ],
+  "buildPresets": [
+    {"name": "debug", "configurePreset": "debug"},
+    {"name": "release", "configurePreset": "release"},
+    {"name": "test", "configurePreset": "test"}
+  ],
+  "testPresets": [
+    {
+      "name": "test",
+      "configurePreset": "test",
+      "output": {"outputOnFailure": true}
+    }
+  ]
+}

@@ -1,0 +1,1 @@
+#include <hayate/error.hpp>
