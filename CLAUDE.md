@@ -39,7 +39,7 @@ C++20 の HTTP フレームワーク兼サーバー。namespace `hayate`。
 5. 全テスト
 6. 停止
 
-Phase を飛ばさない。今の受け入れは Phase 1 と CORS と静的ファイルとレート制限と静的ファイルのストリーミング送出。multipart / WS / SSE / gzip は実装しない。
+Phase を飛ばさない。今の受け入れは Phase 1 と Phase 2（CORS / 静的ファイル / レート制限）と Phase 3（TLS / JWT 検証 / OpenAPI 生成 / 最小 metrics / 静的ファイルのストリーミング送出）。multipart / WS / SSE / gzip は実装しない。
 
 ## 制約
 
