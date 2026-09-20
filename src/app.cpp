@@ -5,6 +5,7 @@
 
 #include <atomic>
 #include <csignal>
+#include <cstddef>
 #include <cstdint>
 #include <thread>
 #include <utility>
@@ -13,6 +14,7 @@
 namespace hayate {
 namespace beast = detail::beast;
 namespace net = detail::net;
+namespace ssl = detail::ssl;
 using tcp = detail::tcp;
 
 namespace {
@@ -28,6 +30,8 @@ void release_one(std::atomic<std::uint32_t> &n) {
 
 struct App::Impl {
     net::io_context ioc;
+    // acceptor より後に壊れ、ioc より先に壊れる位置に置く。
+    std::unique_ptr<ssl::context> ssl_ctx;
     std::unique_ptr<tcp::acceptor> acceptor;
     std::unique_ptr<net::executor_work_guard<net::io_context::executor_type>> work;
     std::unique_ptr<net::signal_set> signals;
@@ -67,6 +71,22 @@ App &App::threads(std::uint32_t n) {
     return *this;
 }
 
+App &App::tls(Tls cfg) {
+    auto ctx = std::make_unique<ssl::context>(ssl::context::tls_server);
+    ctx->set_options(ssl::context::default_workarounds | ssl::context::no_sslv2 |
+                     ssl::context::no_sslv3 | ssl::context::no_tlsv1 | ssl::context::no_tlsv1_1 |
+                     ssl::context::single_dh_use);
+    if (!cfg.key_password.empty()) {
+        ctx->set_password_callback(
+            [pw = cfg.key_password](std::size_t, ssl::context::password_purpose) { return pw; });
+    }
+    // 読めない証明書・鍵はここで投げる。bind() と同じく設定時に落とす。
+    ctx->use_certificate_chain_file(cfg.cert_file);
+    ctx->use_private_key_file(cfg.key_file, ssl::context::pem);
+    impl_->ssl_ctx = std::move(ctx);
+    return *this;
+}
+
 App &App::limits(Limits l) {
     impl_->limits = l;
     return *this;
@@ -90,11 +110,19 @@ boost::asio::awaitable<void> App::run() {
             continue;
         }
         beast::tcp_stream stream(std::move(sock));
-        net::co_spawn(impl_->ioc,
-                      serve_connection(std::move(stream), impl_->limits, impl_->router,
-                                       impl_->shutting,
-                                       [impl = impl_.get()] { release_one(impl->connections); }),
-                      net::detached);
+        auto done = [impl = impl_.get()] { release_one(impl->connections); };
+        if (impl_->ssl_ctx) {
+            net::co_spawn(impl_->ioc,
+                          serve_connection(detail::tls_stream{std::move(stream), *impl_->ssl_ctx},
+                                           impl_->limits, impl_->router, impl_->shutting,
+                                           std::move(done)),
+                          net::detached);
+        } else {
+            net::co_spawn(impl_->ioc,
+                          serve_connection(std::move(stream), impl_->limits, impl_->router,
+                                           impl_->shutting, std::move(done)),
+                          net::detached);
+        }
     }
     co_return;
 }

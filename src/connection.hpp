@@ -15,4 +15,8 @@ detail::net::awaitable<void> serve_connection(detail::beast::tcp_stream stream,
                                               std::atomic<bool> &shutting,
                                               std::function<void()> on_done);
 
+detail::net::awaitable<void> serve_connection(detail::tls_stream stream, const Limits &limits,
+                                              Router &router, std::atomic<bool> &shutting,
+                                              std::function<void()> on_done);
+
 } // namespace hayate

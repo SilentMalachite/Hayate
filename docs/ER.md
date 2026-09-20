@@ -16,6 +16,7 @@ view は所有しない。所有者より長く持たない。
 erDiagram
     APP ||--|| LISTENER : bind
     APP ||--|| ROUTER : owns
+    APP ||--o| TLS : tls_config
     APP ||--o| LIMITS : has
     APP ||--o{ IO_CONTEXT : runs
 
@@ -60,6 +61,11 @@ erDiagram
         string host
         uint16 port
         bool accepting
+    }
+    TLS {
+        string cert_file
+        string key_file
+        string key_password
     }
     LIMITS {
         uint64 max_header_bytes
@@ -203,6 +209,7 @@ sequenceDiagram
 
 | 機能 | 形 | ぶら下がる先 |
 |---|---|---|
+| TLS | `Tls{cert_file, key_file, key_password}` | 設定値 struct。App が 1 つ持つ。設定したら全接続が TLS |
 | CORS | `mw::cors(Cors)` | Middleware。preflight は 204 で短絡。固定 origin なら `Vary: Origin` |
 | 静的ファイル | `files(root, max_bytes, io_threads)` | Handler。root 外・上限超過・不在はどれも 404。FS 呼び出しは `files()` 所有のワーカープール。本体は常に 64 KiB ずつ送出 |
 | レート制限 | `mw::rate_limit(RateLimit)` | Middleware。固定窓、`Request::peer` キー |

@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -27,6 +28,35 @@ namespace {
 
 // 1 応答のメモリをファイルサイズから切り離す窓。
 constexpr std::size_t chunk_bytes = 65536;
+
+// タイマと socket は TCP 側にある。TLS では 1 枚下を見る。
+beast::tcp_stream &lowest(beast::tcp_stream &s) { return s; }
+beast::tcp_stream &lowest(detail::tls_stream &s) { return s.next_layer(); }
+
+net::awaitable<bool> do_handshake(beast::tcp_stream &, std::chrono::milliseconds) {
+    co_return true;
+}
+
+net::awaitable<bool> do_handshake(detail::tls_stream &s, std::chrono::milliseconds window) {
+    s.next_layer().expires_after(window);
+    auto [ec] = co_await s.async_handshake(detail::ssl::stream_base::server, net::as_tuple);
+    co_return !ec;
+}
+
+net::awaitable<void> shutdown_stream(beast::tcp_stream &s, std::chrono::milliseconds) {
+    boost::system::error_code ignored;
+    s.socket().shutdown(tcp::socket::shutdown_send, ignored);
+    co_return;
+}
+
+net::awaitable<void> shutdown_stream(detail::tls_stream &s, std::chrono::milliseconds window) {
+    // close_notify を待つので窓が要る。切れていれば即エラーで戻る。
+    s.next_layer().expires_after(window);
+    co_await s.async_shutdown(net::as_tuple);
+    boost::system::error_code ignored;
+    s.next_layer().socket().shutdown(tcp::socket::shutdown_send, ignored);
+    co_return;
+}
 
 http::response<http::string_body> to_beast(const Response &src, unsigned version, bool keep_alive) {
     http::response<http::string_body> out{http::status(src.status()), version};
@@ -50,15 +80,16 @@ std::optional<Error> limit_error(const boost::system::error_code &ec) {
 
 } // namespace
 
-class Connection : public std::enable_shared_from_this<Connection> {
+template <typename Stream>
+class Connection : public std::enable_shared_from_this<Connection<Stream>> {
   public:
-    Connection(beast::tcp_stream stream, Limits limits, Router &router, std::atomic<bool> &shutting,
+    Connection(Stream stream, Limits limits, Router &router, std::atomic<bool> &shutting,
                std::function<void()> on_done)
         : stream_(std::move(stream)), limits_(limits), router_(router), shutting_(shutting),
           on_done_(std::move(on_done)) {
         // accept 直後なら必ず取れる。リクエストごとに引くと切断済みで空になる。
         boost::system::error_code pec;
-        auto ep = stream_.socket().remote_endpoint(pec);
+        auto ep = lowest(stream_).socket().remote_endpoint(pec);
         peer_ = pec ? std::string{} : ep.address().to_string();
     }
 
@@ -148,7 +179,7 @@ class Connection : public std::enable_shared_from_this<Connection> {
             out.body().size = n;
             left -= n;
             out.body().more = left > 0;
-            stream_.expires_after(limits_.write_timeout);
+            lowest(stream_).expires_after(limits_.write_timeout);
             auto [wec, wbytes] = co_await http::async_write(stream_, sr, net::as_tuple);
             (void)wbytes;
             if (wec && wec != http::error::need_buffer) {
@@ -162,15 +193,30 @@ class Connection : public std::enable_shared_from_this<Connection> {
     }
 
     net::awaitable<void> run() {
-        auto self = shared_from_this();
+        auto self = this->shared_from_this();
         try {
+            // TLS ならここで握手。平文は素通り。失敗したら応答を書かずに閉じる。
+            if (co_await do_handshake(stream_, limits_.read_timeout)) {
+                co_await serve_requests();
+            }
+        } catch (...) {
+        }
+        co_await shutdown_stream(stream_, limits_.write_timeout);
+        finish();
+        co_return;
+    }
+
+  private:
+    net::awaitable<void> serve_requests() {
+        {
             bool first_req = true;
             for (;;) {
                 if (shutting_.load()) {
                     break;
                 }
                 // 1 本目は接続直後なので read_timeout。2 本目以降は次の要求を待つ idle_timeout。
-                stream_.expires_after(first_req ? limits_.read_timeout : limits_.idle_timeout);
+                lowest(stream_).expires_after(first_req ? limits_.read_timeout
+                                                        : limits_.idle_timeout);
                 first_req = false;
                 http::request_parser<http::string_body> parser;
                 parser.header_limit(static_cast<std::uint32_t>(
@@ -181,7 +227,7 @@ class Connection : public std::enable_shared_from_this<Connection> {
                 (void)bytes;
                 if (!ec && !parser.is_done()) {
                     // ヘッダが来た後は本文の到着待ち。窓は idle ではなく read_timeout。
-                    stream_.expires_after(limits_.read_timeout);
+                    lowest(stream_).expires_after(limits_.read_timeout);
                     auto [bec, bbytes] =
                         co_await http::async_read(stream_, buffer_, parser, net::as_tuple);
                     (void)bbytes;
@@ -190,7 +236,7 @@ class Connection : public std::enable_shared_from_this<Connection> {
                 if (ec) {
                     if (const auto over = limit_error(ec)) {
                         auto out = to_beast(Response::from_error(*over), 11, false);
-                        stream_.expires_after(limits_.write_timeout);
+                        lowest(stream_).expires_after(limits_.write_timeout);
                         co_await http::async_write(stream_, out, net::as_tuple);
                     }
                     break;
@@ -207,22 +253,17 @@ class Connection : public std::enable_shared_from_this<Connection> {
                     continue;
                 }
                 auto out = to_beast(res, parser.get().version(), keep);
-                stream_.expires_after(limits_.write_timeout);
+                lowest(stream_).expires_after(limits_.write_timeout);
                 auto [wec, wbytes] = co_await http::async_write(stream_, out, net::as_tuple);
                 (void)wbytes;
                 if (wec || !keep) {
                     break;
                 }
             }
-        } catch (...) {
         }
-        boost::system::error_code ignored;
-        stream_.socket().shutdown(tcp::socket::shutdown_send, ignored);
-        finish();
         co_return;
     }
 
-  private:
     void finish() {
         if (finished_.exchange(true)) {
             return;
@@ -233,7 +274,7 @@ class Connection : public std::enable_shared_from_this<Connection> {
         }
     }
 
-    beast::tcp_stream stream_;
+    Stream stream_;
     beast::flat_buffer buffer_;
     std::string peer_;
     Limits limits_;
@@ -246,8 +287,16 @@ class Connection : public std::enable_shared_from_this<Connection> {
 net::awaitable<void> serve_connection(beast::tcp_stream stream, const Limits &limits,
                                       Router &router, std::atomic<bool> &shutting,
                                       std::function<void()> on_done) {
-    auto conn = std::make_shared<Connection>(std::move(stream), limits, router, shutting,
-                                             std::move(on_done));
+    auto conn = std::make_shared<Connection<beast::tcp_stream>>(std::move(stream), limits, router,
+                                                                shutting, std::move(on_done));
+    co_await conn->run();
+}
+
+net::awaitable<void> serve_connection(detail::tls_stream stream, const Limits &limits,
+                                      Router &router, std::atomic<bool> &shutting,
+                                      std::function<void()> on_done) {
+    auto conn = std::make_shared<Connection<detail::tls_stream>>(std::move(stream), limits, router,
+                                                                 shutting, std::move(on_done));
     co_await conn->run();
 }
 

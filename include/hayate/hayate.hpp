@@ -14,3 +14,4 @@ namespace asio = boost::asio;
 #include <hayate/response.hpp>
 #include <hayate/result.hpp>
 #include <hayate/router.hpp>
+#include <hayate/tls.hpp>

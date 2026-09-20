@@ -91,6 +91,12 @@ classDiagram
         +size : uint64
     }
 
+    class Tls {
+        +cert_file : string
+        +key_file : string
+        +key_password : string
+    }
+
     class Header {
         +name : string
         +value : string_view
@@ -158,6 +164,7 @@ classDiagram
     Middleware ..> Response : may short-circuit
     Result~T~ o-- Error
     Error --> Response : status
+    Tls ..> App : app.tls() configures
     Cors ..> Middleware : mw::cors() builds
     RateLimit ..> Middleware : mw::rate_limit() builds
 ```
@@ -166,6 +173,7 @@ classDiagram
 `Handler` と `Middleware` は利用者の関数オブジェクトでよい。仮想基底を先に切らない。
 `Listener` は独立した型ではない。App が持つ acceptor と `run()` の accept ループがその役。
 
+TLS / CORS / 静的ファイル / レート制限は型を増やさない。`Tls` も設定値の struct で、`ssl::context` は App の中にしか出てこない。
 CORS / 静的ファイル / レート制限は型を増やさない。`Cors` と `RateLimit` は設定値の struct で、
 `mw::cors()` / `mw::rate_limit()` が Middleware を、`files(root, max_bytes, io_threads)` が Handler を返す。
 `StaticFile` / `Service` のようなクラスは作らない。

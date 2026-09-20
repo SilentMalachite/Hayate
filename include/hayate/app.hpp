@@ -3,6 +3,7 @@
 #include <hayate/http.hpp>
 #include <hayate/limits.hpp>
 #include <hayate/router.hpp>
+#include <hayate/tls.hpp>
 
 #include <boost/asio.hpp>
 
@@ -41,6 +42,7 @@ class App {
     App &bind(std::string_view host, std::uint16_t port);
     std::uint16_t port() const noexcept;
     App &threads(std::uint32_t n);
+    App &tls(Tls cfg);
     App &limits(Limits l);
     Limits &limits() noexcept;
     boost::asio::awaitable<void> run();
