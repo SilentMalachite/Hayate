@@ -56,7 +56,14 @@ cmake --preset tsan && cmake --build --preset tsan && ctest --preset tsan --outp
 ```
 
 `release` preset はサニタイザ無し。macOS の Apple Clang の ASan には LeakSanitizer が無いので、
-macOS で見えるのは UAF まで。
+debug preset で見えるのは UAF まで。リークは Homebrew LLVM の clang で見る:
+
+```bash
+cmake -S . -B build/lsan -G Ninja -DCMAKE_BUILD_TYPE=Debug \
+  -DCMAKE_CXX_COMPILER=/opt/homebrew/opt/llvm/bin/clang++ \
+  -DHAYATE_ENABLE_SANITIZERS=ON -DHAYATE_BUILD_TESTS=ON
+cmake --build build/lsan && ASAN_OPTIONS=detect_leaks=1 ctest --test-dir build/lsan
+```
 
 ## できること
 

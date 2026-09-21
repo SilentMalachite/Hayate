@@ -72,7 +72,9 @@ Phase 1
 - HTTP/2 / ORM / テンプレートがリポジトリに無い（TLS は Phase 3 で受け入れた）
 - hello が公開ヘッダだけに依存する
 - debug + ASan で新規リーク・UAF が無い。macOS の Apple Clang の ASan には LeakSanitizer が無い
-  （`detect_leaks is not supported on this platform`）ので、macOS で見えるのは UAF だけ
+  （`detect_leaks is not supported on this platform`）ので、debug preset で見えるのは UAF だけ。
+  リークは Homebrew LLVM の clang で ASan を付けてビルドし、`ASAN_OPTIONS=detect_leaks=1` で全テストを
+  回して見る（2026-09-21、LLVM 23、234 件でリーク 0）
 - 頼んでいないファイルが diff に無い
 
 Phase 2（CORS）
