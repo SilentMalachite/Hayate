@@ -351,9 +351,11 @@ app.use(hayate::mw::cors({.origin = "https://app.example"}));
 
 - `hayate::mw::cors()` は Middleware。新しい公開型（Service 等）は足さない
 - ルート登録はこれまで通り GET / POST のみ。OPTIONS は preflight 用にフレームワークが扱う
-- `Origin` が無ければ CORS ヘッダを付けない
+- `Origin` が無ければ `Access-Control-*` ヘッダを付けない
 - `Origin` がある GET/POST（および 404/405）: `Access-Control-Allow-Origin`（既定 `*`、設定があればその値）
-- `origin` が `*` 以外のときは `Vary: Origin` も付ける（共有キャッシュの取り違え防止）
+- `origin` が `*` 以外のときは `Vary: Origin` も付ける（共有キャッシュの取り違え防止）。
+  応答が `Origin` の有無で変わるので、`Origin` が無い要求への応答にも付ける
+- `Vary` は上書きしない。既存の値を残して `Origin` を足す。既に `Origin` か `*` を含むならそのまま
 - `OPTIONS` + `Origin`: 204。`Allow-Origin` / `Allow-Methods` / `Allow-Headers`。`next` を呼ばない
 - 既定 methods: `GET, POST, OPTIONS`。既定 headers: `Content-Type, Authorization`
 
