@@ -126,7 +126,8 @@ Phase 3（metrics）
 - TLS: OpenSSL 3 via `asio::ssl`。`find_package(OpenSSL 3 REQUIRED)`。最低 TLS 1.2
 - JSON: nlohmann/json v3.11.3 1 本。`hayate::Json` は `nlohmann::json` の別名。現行 glaze は C++23 必須のため採用しない。混在禁止
 - エラー: `hayate::Result<T>` は `std::variant<T, Error>` の薄い自前 1 本。Boost.Outcome は使わない
-- テスト: GoogleTest。実装の前に失敗するテスト。ループバック + エフェメラルポート。スリープ同期しない
+- テスト: GoogleTest。実装の前に失敗するテスト。ループバック + エフェメラルポート。スリープ同期しない。
+  テスト用クライアントは非同期 I/O で期限を効かせ（Beast の期限は同期 I/O に効かない）、CTest にも TIMEOUT を置く
 - 依存: Boost と OpenSSL は `find_package`。nlohmann/json と GoogleTest は FetchContent。vcpkg は使わない
 - 所有: 入力は `string_view` / `span<const byte>`。寿命は Request。足りるならコピーしない
 - スレッド: io_context あたり 1。`app.threads(n)` で複数。共有可変は strand か mutex を書いてから
@@ -175,6 +176,9 @@ using Middleware = std::function<asio::awaitable<Response>(Request&, Next)>;
 
 - `asio::awaitable<Response>(Request&)`
 - `Response(Request&)`（内部で awaitable に包む）
+- どちらも **const で呼べること**（`mutable` ラムダは不可、コンパイル時に弾く）。ハンドラは全接続で
+  共有されるので、状態を持たせると `threads(n>1)` で競合する。状態は App か Request の Extension に置く。
+  条件は公開 concept `hayate::HandlerCallable` で表す
 
 onion: 入りは登録順 A→B、戻りは B→A。`next` を呼ばなければ短絡。
 App の `use()` は 404/405 を含む dispatch 全体を包む（CORS preflight とエラー応答にヘッダが要る）。
@@ -224,6 +228,16 @@ App の `use()` は 404/405 を含む dispatch 全体を包む（CORS preflight 
 超過: header 431、body 413。read/write/idle 切れは接続を閉じる（応答を書けなければ書かない）。`max_connections` 超過の新規は accept せず切る。
 
 窓の切り分け: 1 本目のヘッダ読みは `read_timeout`。keep-alive で次の要求のヘッダを待つ間は `idle_timeout`。ヘッダが揃った後の本文読みは何本目でも `read_timeout`。
+
+HTTP/1.1 の約束:
+
+- HEAD はルーティングしない（GET 扱いにしない。404 / 405 のまま）。ただし HEAD への応答は
+  ステータスによらず本文を送らない。`Content-Length` は本文を送った場合の値を付ける
+- `Expect: 100-continue` の要求には、本文を読む前に `100 Continue` を返す。
+  `Content-Length` が `max_body_bytes` を超えるなら 100 を出さずに 413
+- 接続を続けるかは「サーバーの判断」かつ「応答の `Connection`」。ハンドラが `Connection: close` を
+  付ければ閉じる。サーバーが閉じると決めたら（要求が close、停止中など）、ハンドラの keep-alive は
+  無視して `Connection: close` を送る。送ったヘッダと実際の挙動を食い違わせない
 
 ### JSON
 
@@ -284,6 +298,8 @@ app.get("/openapi.json", [&app](hayate::Request &) {
   （OpenAPI の `{}` は本来 `/` を含まないので、違いを機械可読な形で残す）
 - path パラメータは `in: path` / `required: true` / `schema: {type: string}`
 - 同じパスの GET と POST は 1 つの path 項目にまとまる
+- 形が同じでパラメータ名だけ違うパス（`/users/:id` と `/users/:name`）も 1 つにまとめる。
+  OpenAPI では同じテンプレートとして扱われるため。キーとパラメータ名は最初に登録したルートのもの
 - 各 operation の `responses` は `default` 1 つだけ。ステータスを知らないので創作しない
 - `group()` の prefix は畳み込まれた形（`/api/users`）で出る
 - 文書の配り方は決めない。ルートに載せるのは利用者の仕事
@@ -302,13 +318,13 @@ app.use(hayate::mw::jwt({.secret = "...", .issuer = "", .audience = "",
   1. `Authorization` が `Bearer ` で始まる（スキームは大小無視）
   2. `.` で 3 つちょうどに割れる
   3. header と payload が base64url（パディング無し）で復号できる
-  4. header の `alg` が `HS256`
+  4. header の `alg` が `HS256`（文字列でなければ 401）
   5. `HMAC-SHA256(secret, header_b64 + "." + payload_b64)` と署名が一致。比較は定数時間。
      HMAC の計算に失敗した場合と、計算結果が 32 バイトでない場合は 401（空署名として通さない）
   6. payload に `exp` があり、`now > exp + leeway` でない。`exp` 無しは 401。
      `exp` は int64 秒の整数のみ。小数・範囲外・非数値は 401。加算は飽和させ、溢れない
   7. `nbf` があれば `now + leeway >= nbf`。`nbf` の型と範囲は `exp` と同じ
-  8. `issuer` 設定時は `iss` が一致
+  8. `issuer` 設定時は `iss` が一致（文字列でなければ 401）
   9. `audience` 設定時は `aud` が一致（文字列、または配列に含む）
 - 失敗はすべて 401 `{"unauthorized"}` + `WWW-Authenticate: Bearer`。どの検査で落ちたかは返さない
 - 通ったら `Claims` を Request Extension に入れる。寿命は Request
@@ -350,9 +366,11 @@ app.use(hayate::mw::cors({.origin = "https://app.example"}));
 
 - `hayate::mw::cors()` は Middleware。新しい公開型（Service 等）は足さない
 - ルート登録はこれまで通り GET / POST のみ。OPTIONS は preflight 用にフレームワークが扱う
-- `Origin` が無ければ CORS ヘッダを付けない
+- `Origin` が無ければ `Access-Control-*` ヘッダを付けない
 - `Origin` がある GET/POST（および 404/405）: `Access-Control-Allow-Origin`（既定 `*`、設定があればその値）
-- `origin` が `*` 以外のときは `Vary: Origin` も付ける（共有キャッシュの取り違え防止）
+- `origin` が `*` 以外のときは `Vary: Origin` も付ける（共有キャッシュの取り違え防止）。
+  応答が `Origin` の有無で変わるので、`Origin` が無い要求への応答にも付ける
+- `Vary` は上書きしない。既存の値を残して `Origin` を足す。既に `Origin` か `*` を含むならそのまま
 - `OPTIONS` + `Origin`: 204。`Allow-Origin` / `Allow-Methods` / `Allow-Headers`。`next` を呼ばない
 - 既定 methods: `GET, POST, OPTIONS`。既定 headers: `Content-Type, Authorization`
 
@@ -369,6 +387,7 @@ app.get("/assets/*path", hayate::files("public", 4u * 1024 * 1024, 4));
   std::chrono::milliseconds fs_timeout = std::chrono::seconds(5))`
 - `max_bytes` は配布上限。既定 `0` は無制限。`0` 以外でそれを超える実ファイルは 404（存在を漏らさない）
 - root の末尾 `/` は無視する。登録時に root が無くても同じ扱い
+- 相対パスの root は登録時のカレントディレクトリで絶対パスに解決する（未作成でも）
 - wildcard 名は `path`。空なら `index.html`
 - root の外（`..` / 絶対パス）は 404（存在を漏らさない）
 - 復号後のパスに NUL が入っていたら 404

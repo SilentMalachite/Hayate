@@ -20,8 +20,20 @@ using Handler = std::function<boost::asio::awaitable<Response>(Request &)>;
 using Next = Handler;
 using Middleware = std::function<boost::asio::awaitable<Response>(Request &, Next)>;
 
+// ハンドラは全接続で共有される。const で呼べるものだけ受ける（mutable は threads(n>1)
+// で競合する）。
+template <typename H>
+concept HandlerCallable =
+    std::is_invocable_r_v<boost::asio::awaitable<Response>, const std::decay_t<H> &, Request &> ||
+    std::is_invocable_r_v<Response, const std::decay_t<H> &, Request &>;
+
 template <typename H> Handler wrap_handler(H &&h) {
-    if constexpr (std::is_invocable_r_v<boost::asio::awaitable<Response>, H, Request &>) {
+    static_assert(HandlerCallable<H>, "hayate: handler は const で呼べること。mutable にせず、"
+                                      "状態は App か Request の Extension に置く");
+    // 弾いた後は下の分岐を実体化させない。副次エラーで static_assert の文言が埋もれる。
+    if constexpr (!HandlerCallable<H>) {
+        return {};
+    } else if constexpr (std::is_invocable_r_v<boost::asio::awaitable<Response>, H, Request &>) {
         return Handler(std::forward<H>(h));
     } else {
         return [fn = std::forward<H>(h)](Request &req) -> boost::asio::awaitable<Response> {

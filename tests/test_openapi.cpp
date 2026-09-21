@@ -53,6 +53,21 @@ TEST(Openapi, MergesMethodsOnOnePath) {
     EXPECT_EQ(item.size(), 2u);
 }
 
+// /users/{id} と /users/{name} は OpenAPI では同じテンプレート。別キーにすると不正な文書になる。
+TEST(Openapi, SameShapeDifferentParamNamesMerge) {
+    hayate::App app;
+    app.get("/users/:id", ok);
+    app.post("/users/:name", ok);
+    const auto doc = hayate::openapi(app);
+    const auto &paths = doc.at("paths");
+    EXPECT_EQ(paths.size(), 1u) << paths.dump();
+    ASSERT_TRUE(paths.contains("/users/{id}"));
+    const auto &item = paths.at("/users/{id}");
+    EXPECT_TRUE(item.contains("get"));
+    ASSERT_TRUE(item.contains("post"));
+    EXPECT_EQ(item.at("post").at("parameters").at(0).value("name", ""), "id");
+}
+
 TEST(Openapi, UnregisteredMethodIsAbsent) {
     hayate::App app;
     app.get("/users", ok);

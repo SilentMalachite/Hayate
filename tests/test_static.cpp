@@ -225,6 +225,29 @@ TEST(Static, TrailingSlashRootCreatedLater) {
     EXPECT_EQ(r.body, "hi");
 }
 
+// 未作成の相対 root が相対のまま残ると、後で作っても候補（絶対パス）が root 外扱いになる。
+// libstdc++ の weakly_canonical で起きる。libc++ では今も通る（回帰の檻）。
+TEST(Static, RelativeRootCreatedLater) {
+    StaticDir base;
+    struct CwdGuard {
+        fs::path saved = fs::current_path();
+        ~CwdGuard() {
+            std::error_code ec;
+            fs::current_path(saved, ec);
+        }
+    } guard;
+    fs::current_path(base.dir);
+    TestServer srv([](hayate::App &app) { app.get("/assets/*path", hayate::files("public")); });
+    fs::create_directories(base.dir / "public");
+    {
+        std::ofstream out(base.dir / "public" / "a.txt");
+        out << "late";
+    }
+    auto r = http_call("127.0.0.1", srv.port(), http::verb::get, "/assets/a.txt");
+    EXPECT_EQ(r.status, 200);
+    EXPECT_EQ(r.body, "late");
+}
+
 TEST(Static, PercentEncodedFileName) {
     StaticDir root;
     {

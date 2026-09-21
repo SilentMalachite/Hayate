@@ -82,6 +82,12 @@ constexpr std::int64_t sat_add(std::int64_t a, std::int64_t b) noexcept {
     return a + b;
 }
 
+// key が文字列で want と等しいか。value() は型違いで投げ、500 に化けるので使わない。
+bool string_claim_is(const Json &obj, const char *key, std::string_view want) {
+    const auto it = obj.find(key);
+    return it != obj.end() && it->is_string() && it->get_ref<const std::string &>() == want;
+}
+
 bool audience_ok(const Json &payload, const std::string &want) {
     if (want.empty()) {
         return true;
@@ -141,7 +147,7 @@ Middleware jwt(Jwt cfg) {
         // alg はここで断つ。none もアルゴリズム混同も署名を見る前に落ちる。
         const auto header = Json::parse(*header_raw, nullptr, false);
         if (header.is_discarded() || !header.is_object() ||
-            header.value("alg", std::string{}) != "HS256") {
+            !string_claim_is(header, "alg", "HS256")) {
             co_return unauthorized();
         }
 
@@ -177,7 +183,7 @@ Middleware jwt(Jwt cfg) {
                 co_return unauthorized();
             }
         }
-        if (!cfg.issuer.empty() && payload.value("iss", std::string{}) != cfg.issuer) {
+        if (!cfg.issuer.empty() && !string_claim_is(payload, "iss", cfg.issuer)) {
             co_return unauthorized();
         }
         if (!audience_ok(payload, cfg.audience)) {

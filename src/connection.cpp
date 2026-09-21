@@ -1,4 +1,5 @@
 #include "connection.hpp"
+#include "detail/ascii.hpp"
 #include "detail/offload.hpp"
 #include "detail/open_file.hpp"
 #include "detail/percent.hpp"
@@ -59,10 +60,23 @@ net::awaitable<void> shutdown_stream(detail::tls_stream &s, std::chrono::millise
     co_return;
 }
 
+// ハンドラのヘッダを入れてから接続の扱いを決める。サーバーが閉じるなら close を強制し、
+// ハンドラが close を付けていればそれに従う。呼び出し側は out.keep_alive() を見て続けるか決める。
+template <typename Body> void settle_keep_alive(http::response<Body> &out, bool server_keep) {
+    if (!server_keep) {
+        out.keep_alive(false);
+    }
+}
+
+bool expects_continue(const http::request<http::string_body> &req) {
+    return detail::iequals(req[http::field::expect], "100-continue");
+}
+
 http::response<http::string_body> to_beast(const Response &src, unsigned version, bool keep_alive) {
     http::response<http::string_body> out{http::status(src.status()), version};
     out.keep_alive(keep_alive);
     src.for_each_header([&](std::string_view k, std::string_view v) { out.set(k, v); });
+    settle_keep_alive(out, keep_alive);
     out.body() = std::string(src.body());
     out.prepare_payload();
     return out;
@@ -142,9 +156,24 @@ class Connection : public std::enable_shared_from_this<Connection<Stream>> {
         dst.peer_ = peer_;
     }
 
+    // HEAD には本文を送らない。Content-Length は本文を送った場合の値のまま。
+    net::awaitable<boost::system::error_code> write_message(http::response<http::string_body> &out,
+                                                            bool head) {
+        if (head) {
+            http::response_serializer<http::string_body> sr{out};
+            auto [ec, n] = co_await http::async_write_header(stream_, sr, net::as_tuple);
+            (void)n;
+            co_return ec;
+        }
+        auto [ec, n] = co_await http::async_write(stream_, out, net::as_tuple);
+        (void)n;
+        co_return ec;
+    }
+
     // 送出中も io スレッドを塞がない。読みは FileSource のプールで回す。
     // 返り値 false は「接続をもう使えない」。ヘッダを送った後は status を直せない。
-    net::awaitable<bool> write_file(const Response &res, unsigned version, bool keep) {
+    // keep は入出力。応答の Connection を反映した最終値に書き換える。
+    net::awaitable<bool> write_file(const Response &res, unsigned version, bool &keep, bool head) {
         const auto *src = res.file_source();
         if (!src->file) {
             co_return false;
@@ -152,8 +181,16 @@ class Connection : public std::enable_shared_from_this<Connection<Stream>> {
         http::response<http::buffer_body> out{http::status(res.status()), version};
         out.keep_alive(keep);
         res.for_each_header([&](std::string_view k, std::string_view v) { out.set(k, v); });
+        settle_keep_alive(out, keep);
+        keep = out.keep_alive();
         out.content_length(src->size);
         http::response_serializer<http::buffer_body> sr{out};
+        if (head) {
+            lowest(stream_).expires_after(limits_.write_timeout);
+            auto [hec, hn] = co_await http::async_write_header(stream_, sr, net::as_tuple);
+            (void)hn;
+            co_return !hec;
+        }
         // 期限切れで待つのをやめてもワーカーが書き続ける。バッファとファイルは
         // 共有で持ち、ラムダに値で渡す。
         auto file = src->file;
@@ -226,6 +263,19 @@ class Connection : public std::enable_shared_from_this<Connection<Stream>> {
                     co_await http::async_read_header(stream_, buffer_, parser, net::as_tuple);
                 (void)bytes;
                 if (!ec && !parser.is_done()) {
+                    // 100 を待つクライアントには先に返す。上限超過は async_read_header が
+                    // body_limit で既に落としているので、ここに来るのは受け取れる本文だけ。
+                    if (expects_continue(parser.get())) {
+                        http::response<http::empty_body> cont{http::status::continue_,
+                                                              parser.get().version()};
+                        lowest(stream_).expires_after(limits_.write_timeout);
+                        auto [cec, cbytes] =
+                            co_await http::async_write(stream_, cont, net::as_tuple);
+                        (void)cbytes;
+                        if (cec) {
+                            break;
+                        }
+                    }
                     // ヘッダが来た後は本文の到着待ち。窓は idle ではなく read_timeout。
                     lowest(stream_).expires_after(limits_.read_timeout);
                     auto [bec, bbytes] =
@@ -236,9 +286,11 @@ class Connection : public std::enable_shared_from_this<Connection<Stream>> {
                 if (ec) {
                     if (const auto over = limit_error(ec)) {
                         detail::count_response(counters_, over->http_status);
+                        const bool head =
+                            parser.is_header_done() && parser.get().method() == http::verb::head;
                         auto out = to_beast(Response::from_error(*over), 11, false);
                         lowest(stream_).expires_after(limits_.write_timeout);
-                        co_await http::async_write(stream_, out, net::as_tuple);
+                        co_await write_message(out, head);
                     }
                     break;
                 }
@@ -246,18 +298,20 @@ class Connection : public std::enable_shared_from_this<Connection<Stream>> {
                 load(req, parser.get());
                 Response res = co_await router_.dispatch(req);
                 detail::count_response(counters_, res.status());
+                const bool head = parser.get().method() == http::verb::head;
                 bool keep = parser.get().keep_alive() && !shutting_.load();
                 if (res.is_file()) {
-                    const bool ok = co_await write_file(res, parser.get().version(), keep);
+                    const bool ok = co_await write_file(res, parser.get().version(), keep, head);
                     if (!ok || !keep) {
                         break;
                     }
                     continue;
                 }
                 auto out = to_beast(res, parser.get().version(), keep);
+                // 送ったヘッダと挙動を揃える。ハンドラの close もここで効く。
+                keep = out.keep_alive();
                 lowest(stream_).expires_after(limits_.write_timeout);
-                auto [wec, wbytes] = co_await http::async_write(stream_, out, net::as_tuple);
-                (void)wbytes;
+                const auto wec = co_await write_message(out, head);
                 if (wec || !keep) {
                     break;
                 }

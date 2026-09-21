@@ -26,6 +26,8 @@ struct HttpCall {
     std::string error_message;
 };
 
+// 呼び出し全体に timeout を掛ける。Beast の期限は非同期 I/O にしか効かないので、
+// 同期 API ではなく co_spawn + ioc.run() で回す。
 inline HttpCall http_call(std::string host, std::uint16_t port, boost::beast::http::verb method,
                           std::string target, std::string body = {}, std::string content_type = {},
                           std::chrono::milliseconds timeout = std::chrono::seconds(2),
@@ -37,8 +39,7 @@ inline HttpCall http_call(std::string host, std::uint16_t port, boost::beast::ht
     try {
         net::io_context ioc;
         boost::beast::tcp_stream stream(ioc);
-        stream.expires_after(timeout);
-        stream.connect(net::ip::tcp::endpoint(net::ip::make_address(host), port));
+        const net::ip::tcp::endpoint ep(net::ip::make_address(host), port);
         http::request<http::string_body> req{method, target, 11};
         req.set(http::field::host, host);
         req.keep_alive(false);
@@ -53,10 +54,35 @@ inline HttpCall http_call(std::string host, std::uint16_t port, boost::beast::ht
         for (const auto &[k, v] : headers) {
             req.set(k, v);
         }
-        http::write(stream, req);
         boost::beast::flat_buffer buf;
         http::response<http::string_body> res;
-        http::read(stream, buf, res);
+        boost::system::error_code failed;
+        net::co_spawn(
+            ioc,
+            [&]() -> net::awaitable<void> {
+                stream.expires_after(timeout);
+                auto [cec] = co_await stream.async_connect(ep, net::as_tuple);
+                if (cec) {
+                    failed = cec;
+                    co_return;
+                }
+                auto [wec, wn] = co_await http::async_write(stream, req, net::as_tuple);
+                (void)wn;
+                if (wec) {
+                    failed = wec;
+                    co_return;
+                }
+                auto [rec, rn] = co_await http::async_read(stream, buf, res, net::as_tuple);
+                (void)rn;
+                failed = rec;
+            },
+            net::detached);
+        ioc.run();
+        if (failed) {
+            out.error = std::make_error_code(std::errc::connection_refused);
+            out.error_message = failed.message();
+            return out;
+        }
         out.status = res.result_int();
         out.body = res.body();
         out.allow = std::string(res[http::field::allow]);
