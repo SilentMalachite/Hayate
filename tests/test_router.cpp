@@ -3,6 +3,8 @@
 
 #include <gtest/gtest.h>
 
+#include <stdexcept>
+
 namespace http = boost::beast::http;
 
 // ハンドラは全接続で共有される。mutable は同期・非同期とも受けない。
@@ -219,15 +221,41 @@ TEST(Router, InvalidHeaderNameIsIgnored) {
     EXPECT_EQ(r.extra["Bad Name"], "");
 }
 
-// 全セグメント同点なら先に登録した方。
-TEST(Router, EqualScoreFirstRegisteredWins) {
-    TestServer srv([](hayate::App &app) {
-        app.get("/u/:id", [](hayate::Request &) { return hayate::Response::text("id"); });
-        app.get("/u/:name", [](hayate::Request &) { return hayate::Response::text("name"); });
-    });
-    auto r = http_call("127.0.0.1", srv.port(), http::verb::get, "/u/7");
-    EXPECT_EQ(r.status, 200);
-    EXPECT_EQ(r.body, "id");
+// 同じ形の後の方には一致する要求が無い。param / wildcard の名前は形に入らない。
+TEST(Router, DuplicateShapeThrows) {
+    auto h = [](hayate::Request &) { return hayate::Response::text("x"); };
+    {
+        hayate::App app;
+        app.get("/u/:id", h);
+        EXPECT_THROW(app.get("/u/:id", h), std::invalid_argument);
+        EXPECT_THROW(app.get("/u/:name", h), std::invalid_argument);
+        EXPECT_NO_THROW(app.post("/u/:name", h));
+        EXPECT_NO_THROW(app.get("/u/me", h));
+        EXPECT_NO_THROW(app.get("/u/*rest", h));
+        EXPECT_THROW(app.get("/u/*all", h), std::invalid_argument);
+    }
+    {
+        // group をまたいでも、group の中同士でも同じ。
+        hayate::App app;
+        app.group("/api", [&](hayate::Router &r) { r.get("/ping", h); });
+        EXPECT_THROW(app.get("/api/ping", h), std::invalid_argument);
+        EXPECT_THROW(app.group("/g",
+                               [&](hayate::Router &r) {
+                                   r.get("/x", h);
+                                   r.get("/x", h);
+                               }),
+                     std::invalid_argument);
+    }
+}
+
+// 名前の無い param / wildcard と途中の wildcard は、一致する要求が無いか名前で引けない。
+TEST(Router, MalformedPatternThrows) {
+    auto h = [](hayate::Request &) { return hayate::Response::text("x"); };
+    hayate::App app;
+    for (const char *p : {"/a/:", "/a/*", "/:", "/*", "/a/*rest/b"}) {
+        EXPECT_THROW(app.get(p, h), std::invalid_argument) << p;
+    }
+    EXPECT_NO_THROW(app.get("/a/*rest", h));
 }
 
 // セグメントごとに param > wildcard。登録順で覆らない。
