@@ -298,6 +298,8 @@ app.get("/openapi.json", [&app](hayate::Request &) {
   （OpenAPI の `{}` は本来 `/` を含まないので、違いを機械可読な形で残す）
 - path パラメータは `in: path` / `required: true` / `schema: {type: string}`
 - 同じパスの GET と POST は 1 つの path 項目にまとまる
+- 形が同じでパラメータ名だけ違うパス（`/users/:id` と `/users/:name`）も 1 つにまとめる。
+  OpenAPI では同じテンプレートとして扱われるため。キーとパラメータ名は最初に登録したルートのもの
 - 各 operation の `responses` は `default` 1 つだけ。ステータスを知らないので創作しない
 - `group()` の prefix は畳み込まれた形（`/api/users`）で出る
 - 文書の配り方は決めない。ルートに載せるのは利用者の仕事
