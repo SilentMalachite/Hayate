@@ -283,10 +283,10 @@ app.tls({.cert_file = "server.pem", .key_file = "server.key"})
 - 新しい公開型は設定値 struct `Tls` 1 つだけ。`TlsContext` のようなクラスは作らない
 - `ssl::context` は App が内部で組む。公開ヘッダに `asio::ssl` は出さない
 - `tls()` を呼んだ App は全接続が TLS。平文との同時待ち受けはしない
-- 証明書 / 鍵が読めなければ `tls()` が投げる（`bind()` と同じく設定時に落とす）
+- 証明書 / 鍵が読めない、または鍵が証明書と対でなければ `tls()` が投げる（`bind()` と同じく設定時に落とす）
 - `key_password` が空なら鍵にパスフレーズ無しとして扱う
 - ハンドシェイクの窓は `read_timeout`。失敗した接続は応答を書かずに閉じる
-- 終了は TLS shutdown → socket shutdown の順
+- 終了は TLS shutdown → socket shutdown の順。相手の close_notify を待つのは `write_timeout` まで
 - sslv2 / sslv3 / tlsv1 / tlsv1.1 を無効化する。最低 TLS 1.2
 - `Request::peer()` は TLS でも accept 時の remote IP
 
