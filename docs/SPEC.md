@@ -303,13 +303,13 @@ app.use(hayate::mw::jwt({.secret = "...", .issuer = "", .audience = "",
   1. `Authorization` が `Bearer ` で始まる（スキームは大小無視）
   2. `.` で 3 つちょうどに割れる
   3. header と payload が base64url（パディング無し）で復号できる
-  4. header の `alg` が `HS256`
+  4. header の `alg` が `HS256`（文字列でなければ 401）
   5. `HMAC-SHA256(secret, header_b64 + "." + payload_b64)` と署名が一致。比較は定数時間。
      HMAC の計算に失敗した場合と、計算結果が 32 バイトでない場合は 401（空署名として通さない）
   6. payload に `exp` があり、`now > exp + leeway` でない。`exp` 無しは 401。
      `exp` は int64 秒の整数のみ。小数・範囲外・非数値は 401。加算は飽和させ、溢れない
   7. `nbf` があれば `now + leeway >= nbf`。`nbf` の型と範囲は `exp` と同じ
-  8. `issuer` 設定時は `iss` が一致
+  8. `issuer` 設定時は `iss` が一致（文字列でなければ 401）
   9. `audience` 設定時は `aud` が一致（文字列、または配列に含む）
 - 失敗はすべて 401 `{"unauthorized"}` + `WWW-Authenticate: Bearer`。どの検査で落ちたかは返さない
 - 通ったら `Claims` を Request Extension に入れる。寿命は Request

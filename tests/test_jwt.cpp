@@ -196,6 +196,31 @@ TEST(Hmac, Sha256MatchesRfc4231Vector) {
     EXPECT_EQ(to_hex(*mac), "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843");
 }
 
+// 型違いの値は例外で 500 に化けていた。どの検査で落ちても 401。
+TEST(Jwt, NonStringAlgIs401) {
+    TestServer srv([](hayate::App &app) { protect(app, base_cfg()); });
+    const auto header = Json::object({{"alg", 123}, {"typ", "JWT"}});
+    const auto tok =
+        make_token(header, Json::object({{"sub", "a"}, {"exp", now_s() + 300}}), kSecret);
+    auto r = call(srv.port(), tok, {"WWW-Authenticate"});
+    EXPECT_EQ(r.status, 401);
+    EXPECT_NE(r.extra["WWW-Authenticate"].find("Bearer"), std::string::npos);
+}
+
+TEST(Jwt, NonStringIssIs401) {
+    TestServer srv([](hayate::App &app) {
+        auto cfg = base_cfg();
+        cfg.issuer = "https://issuer.example";
+        protect(app, cfg);
+    });
+    const auto tok = make_token(
+        hs256_header(),
+        Json::object({{"sub", "a"}, {"exp", now_s() + 300}, {"iss", Json::array()}}), kSecret);
+    auto r = call(srv.port(), tok, {"WWW-Authenticate"});
+    EXPECT_EQ(r.status, 401);
+    EXPECT_NE(r.extra["WWW-Authenticate"].find("Bearer"), std::string::npos);
+}
+
 TEST(Jwt, AlgNoneIs401) {
     TestServer srv([](hayate::App &app) { protect(app, base_cfg()); });
     const auto header = Json::object({{"alg", "none"}, {"typ", "JWT"}});
