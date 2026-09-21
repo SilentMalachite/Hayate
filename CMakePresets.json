@@ -27,8 +27,7 @@
     },
     {
       "name": "test",
-      "inherits": "debug",
-      "binaryDir": "${sourceDir}/build/test"
+      "inherits": "debug"
     },
     {
       "name": "tsan",
