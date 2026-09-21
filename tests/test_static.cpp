@@ -230,6 +230,20 @@ TEST(Static, RelativeRootCreatedLater) {
     EXPECT_EQ(r.body, "late");
 }
 
+// 包含判定が「root の直後が区切りか」だと、root が `/` のときに配下が全部外れる。
+TEST(Static, RootSlashServesDescendant) {
+    TempDir base;
+    {
+        std::ofstream out(base.dir / "a.txt");
+        out << "root";
+    }
+    const auto abs = fs::canonical(base.dir / "a.txt").string();
+    TestServer srv([](hayate::App &app) { app.get("/assets/*path", hayate::files("/")); });
+    auto r = http_call("127.0.0.1", srv.port(), http::verb::get, "/assets" + abs);
+    EXPECT_EQ(r.status, 200);
+    EXPECT_EQ(r.body, "root");
+}
+
 TEST(Static, PercentEncodedFileName) {
     TempDir root;
     {
