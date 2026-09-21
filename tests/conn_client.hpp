@@ -11,8 +11,15 @@
 // 期限切れでも閉じないので後で読み直せる。期限切れは beast::error::timeout で返す。
 class Conn {
   public:
-    explicit Conn(std::uint16_t port, std::chrono::milliseconds limit = std::chrono::seconds(2)) {
+    // receive_buffer > 0 なら接続前に SO_RCVBUF を絞る。後からでは受信窓に効かない。
+    explicit Conn(std::uint16_t port, std::chrono::milliseconds limit = std::chrono::seconds(2),
+                  int receive_buffer = 0) {
         const boost::asio::ip::tcp::endpoint ep(boost::asio::ip::make_address("127.0.0.1"), port);
+        if (receive_buffer > 0) {
+            stream_.socket().open(ep.protocol());
+            stream_.socket().set_option(
+                boost::asio::socket_base::receive_buffer_size(receive_buffer));
+        }
         connect_error_ = run(limit, [&]() -> boost::asio::awaitable<boost::system::error_code> {
             auto [ec] = co_await stream_.async_connect(ep, boost::asio::as_tuple);
             co_return ec;

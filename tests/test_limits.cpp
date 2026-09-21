@@ -1,4 +1,6 @@
+#include "conn_client.hpp"
 #include "http_client.hpp"
+#include "metrics_text.hpp"
 #include "test_server.hpp"
 
 #include <boost/asio.hpp>
@@ -10,6 +12,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstring>
 #include <string>
@@ -234,4 +237,48 @@ TEST(Limits, AcceptSurvivesFdExhaustion) {
     const auto ec = read_within(ioc, later, buf, res, std::chrono::seconds(2));
     ASSERT_FALSE(ec) << ec.message();
     EXPECT_EQ(res.result_int(), 200);
+}
+
+// 読まない client に書き続けると、write_timeout で切る。切らないと接続と本文を握り続ける。
+TEST(Limits, WriteTimeoutClosesStalledReader) {
+    // client の受信窓とサーバーの送信バッファ（自動調整の上限を含む）を合わせても収まらない大きさ。
+    constexpr std::size_t kBody = 16u * 1024 * 1024;
+    TestServer srv([](hayate::App &app) {
+        app.limits().write_timeout = std::chrono::milliseconds(200);
+        app.get("/big",
+                [](hayate::Request &) { return hayate::Response::text(std::string(kBody, 'x')); });
+        app.get("/metrics", hayate::metrics(app));
+    });
+    Conn c(srv.port(), std::chrono::seconds(2), 4096);
+    ASSERT_FALSE(c.connect_error());
+    http::request<http::string_body> req{http::verb::get, "/big", 11};
+    req.set(http::field::host, "127.0.0.1");
+    req.keep_alive(false);
+    ASSERT_FALSE(c.write(req));
+
+    // 期限で切れれば、開いている接続はスクレイプ自身の 1 本になる。時間ではなく状態を待つ。
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    long long open = -1;
+    while (open != 1 && std::chrono::steady_clock::now() < deadline) {
+        auto m = http_call("127.0.0.1", srv.port(), http::verb::get, "/metrics");
+        open = value_of(m.body, "hayate_connections_open");
+    }
+    ASSERT_EQ(open, 1) << "stalled connection was not closed";
+
+    // カーネルに残った分を読み切ると、Content-Length に届く前に EOF。
+    std::size_t total = 0;
+    std::array<char, 64 * 1024> chunk{};
+    const auto ec =
+        c.run(std::chrono::seconds(5), [&]() -> net::awaitable<boost::system::error_code> {
+            for (;;) {
+                auto [rec, n] =
+                    co_await c.stream().async_read_some(net::buffer(chunk), net::as_tuple);
+                total += n;
+                if (rec) {
+                    co_return rec;
+                }
+            }
+        });
+    EXPECT_NE(ec, boost::beast::error::timeout);
+    EXPECT_LT(total, kBody);
 }

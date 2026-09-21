@@ -8,9 +8,11 @@
 #include <gtest/gtest.h>
 
 #include <atomic>
+#include <csignal>
 #include <cstdint>
 #include <future>
 #include <latch>
+#include <memory>
 #include <string>
 #include <thread>
 #include <vector>
@@ -200,4 +202,29 @@ TEST(Concurrency, StopWhileAccepting) {
     auto refused = http_call("127.0.0.1", srv.port(), http::verb::get, "/echo", {}, {},
                              std::chrono::milliseconds(300));
     EXPECT_TRUE(refused.error || refused.status == 0);
+}
+
+// SIGTERM と stop() が重なっても、停止は 1 回分だけ効き、serve() は返る（F03）。
+TEST(Concurrency, SigtermDuringStop) {
+    auto srv = std::make_unique<TestServer>([](hayate::App &app) {
+        app.threads(2);
+        app.get("/", [](hayate::Request &) { return hayate::Response::text("ok"); });
+    });
+    // signal_set は accept ループより先に入る。1 本通れば SIGTERM で落ちない。
+    ASSERT_EQ(http_call("127.0.0.1", srv->port(), http::verb::get, "/").status, 200);
+    std::latch go(3);
+    // raise は呼んだスレッドで handler を走らせてから返る。kill だと別スレッドに遅れて届き、
+    // signal_set を壊した後に既定動作でプロセスごと落ちることがある。
+    std::thread by_signal([&] {
+        go.arrive_and_wait();
+        ::raise(SIGTERM);
+    });
+    std::thread by_call([&] {
+        go.arrive_and_wait();
+        srv->app().stop();
+    });
+    go.arrive_and_wait();
+    by_signal.join();
+    by_call.join();
+    srv.reset();
 }

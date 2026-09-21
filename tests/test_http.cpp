@@ -242,3 +242,58 @@ TEST(Http, ExpectContinueIgnoredOnHttp10) {
     EXPECT_EQ(res.result_int(), 200);
     EXPECT_EQ(res.body(), "hello");
 }
+
+// HEAD の Content-Length は、本文を送った場合の値。同じ 405 の本文と比べる。
+TEST(Http, HeadContentLengthMatchesBody) {
+    TestServer srv([](hayate::App &app) {
+        app.get("/", [](hayate::Request &) { return hayate::Response::text("root"); });
+    });
+    Conn c(srv.port());
+    ASSERT_FALSE(c.connect_error());
+    ASSERT_FALSE(c.write(make_req(http::verb::head, "/", true)));
+    http::response_parser<http::empty_body> head;
+    head.skip(true);
+    ASSERT_FALSE(c.read(head));
+    EXPECT_EQ(head.get().result_int(), 405);
+
+    ASSERT_FALSE(c.write(make_req(http::verb::post, "/", false)));
+    http::response<http::string_body> post;
+    ASSERT_FALSE(c.read(post));
+    EXPECT_EQ(post.result_int(), 405);
+    ASSERT_FALSE(post.body().empty());
+    EXPECT_EQ(head.get()[http::field::content_length], std::to_string(post.body().size()));
+}
+
+// 100 の後も keep-alive は続く。同じ接続の 2 本目が通る。
+TEST(Http, ExpectContinueKeepsAlive) {
+    TestServer srv([](hayate::App &app) {
+        app.post("/echo",
+                 [](hayate::Request &req) { return hayate::Response::text(text_of(req)); });
+    });
+    Conn c(srv.port());
+    ASSERT_FALSE(c.connect_error());
+    auto req = make_req(http::verb::post, "/echo", true);
+    req.set(http::field::expect, "100-continue");
+    req.body() = "hello";
+    req.prepare_payload();
+    http::request_serializer<http::string_body> sr{req};
+    ASSERT_FALSE(c.write_header(sr));
+    http::response<http::empty_body> interim;
+    ASSERT_FALSE(c.read(interim));
+    EXPECT_EQ(interim.result(), http::status::continue_);
+    ASSERT_FALSE(c.write(sr));
+    http::response<http::string_body> first;
+    ASSERT_FALSE(c.read(first));
+    EXPECT_EQ(first.body(), "hello");
+    EXPECT_TRUE(first.keep_alive());
+
+    auto again = make_req(http::verb::post, "/echo", false);
+    again.body() = "again";
+    again.prepare_payload();
+    ASSERT_FALSE(c.write(again));
+    http::response<http::string_body> second;
+    const auto ec = c.read(second);
+    ASSERT_FALSE(ec) << ec.message();
+    EXPECT_EQ(second.result_int(), 200);
+    EXPECT_EQ(second.body(), "again");
+}
