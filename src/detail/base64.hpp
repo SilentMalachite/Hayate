@@ -47,6 +47,10 @@ inline std::optional<std::string> base64url_decode(std::string_view in) {
             out.push_back(static_cast<char>((acc >> bits) & 0xff));
         }
     }
+    // 余りのビットを捨てると、同じバイト列に綴りが何通りもできる。正準な 0 だけ受け取る。
+    if ((acc & ((1u << bits) - 1)) != 0) {
+        return std::nullopt;
+    }
     return out;
 }
 

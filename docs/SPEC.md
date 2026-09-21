@@ -332,7 +332,8 @@ app.use(hayate::mw::jwt({.secret = "...", .issuer = "", .audience = "",
 - 検証の順
   1. `Authorization` が `Bearer ` で始まる（スキームは大小無視）
   2. `.` で 3 つちょうどに割れる
-  3. header と payload が base64url（パディング無し）で復号できる
+  3. header と payload が base64url（パディング無し）で復号できる。末尾の未使用ビットが 0 でない
+     符号は正準でないので復号できないとみなす（署名も同じ。1 つの署名に綴りが何通りもできない）
   4. header の `alg` が `HS256`（文字列でなければ 401）
   5. `HMAC-SHA256(secret, header_b64 + "." + payload_b64)` と署名が一致。比較は定数時間。
      HMAC の計算に失敗した場合と、計算結果が 32 バイトでない場合は 401（空署名として通さない）
