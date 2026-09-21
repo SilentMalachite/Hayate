@@ -53,8 +53,10 @@ class App {
     App &tls(Tls cfg);
     App &limits(Limits l);
     Limits &limits() noexcept;
+    // accept ループ。App 自身の io_context 上で spawn すること（acceptor がそこに束縛されている）。
     boost::asio::awaitable<void> run();
     void serve();
+    // どのスレッドから何度呼んでもよい。効果は 1 回分。
     void stop();
 
   private:

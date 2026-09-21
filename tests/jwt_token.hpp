@@ -53,7 +53,7 @@ inline hayate::Json hs256_header() {
 inline std::string sign_parts(const std::string &header_b64, const std::string &payload_b64,
                               const std::string &secret) {
     const auto signing = header_b64 + "." + payload_b64;
-    return signing + "." + base64url_encode(hayate::detail::hmac_sha256(secret, signing));
+    return signing + "." + base64url_encode(hayate::detail::hmac_sha256(secret, signing).value());
 }
 
 inline std::string make_token(const hayate::Json &header, const hayate::Json &payload,

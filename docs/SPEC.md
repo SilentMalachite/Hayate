@@ -130,6 +130,7 @@ Phase 3（metrics）
 - 依存: Boost と OpenSSL は `find_package`。nlohmann/json と GoogleTest は FetchContent。vcpkg は使わない
 - 所有: 入力は `string_view` / `span<const byte>`。寿命は Request。足りるならコピーしない
 - スレッド: io_context あたり 1。`app.threads(n)` で複数。共有可変は strand か mutex を書いてから
+- 並行の単位は接続。1 接続 1 strand で直列、異なる接続は並行に走る
 - 禁止: `new`/`delete`/`malloc`、生配列、ハンドラ境界をまたぐ例外、共有可変グローバル
 - 作業順: この SPEC → 公開ヘッダ → 失敗するテスト → 最小実装 → 全テスト → 停止
 - 正本は `docs/SPEC.md`。ER が参照する ARCHITECTURE は本 SPEC の『ルーティング』節。
@@ -199,7 +200,13 @@ App の `use()` は 404/405 を含む dispatch 全体を包む（CORS preflight 
 - App が `io_context` と `Router` と `Limits` と acceptor を所有する
 - `bind(host, port)` は socket bind + listen まで同期。`port()==0` ならエフェメラル
 - `port()` は bind 後の実ポート
-- `run()` は accept ループ。`asio::awaitable<void>`。`stop()` で終わる
+- `run()` は accept ループ。`asio::awaitable<void>`。`stop()` で終わる。
+  acceptor は App の `io_context` に束縛されているので、`run()` もその `io_context` 上で spawn する。
+  外部の executor では動かない
+- accept した接続ごとに strand を 1 本作る。その接続の socket・stream・タイマー・coroutine は
+  すべてその strand 上で動く（`threads(n)` で n>1 のとき Beast の stream が要求する条件）
+- accept ループと `stop()` は管理用 strand 1 本で直列化する。`stop()` はどのスレッドから
+  何度呼んでもよく、効果は 1 回分
 - `serve()` は `threads(n)`（既定 1）で io_context を blocking 実行する。SIGINT/SIGTERM で `stop()`
 - `stop()` は新規 accept を止め、in-flight の読書きを完了させてから io_context を止める
 
@@ -296,14 +303,16 @@ app.use(hayate::mw::jwt({.secret = "...", .issuer = "", .audience = "",
   2. `.` で 3 つちょうどに割れる
   3. header と payload が base64url（パディング無し）で復号できる
   4. header の `alg` が `HS256`
-  5. `HMAC-SHA256(secret, header_b64 + "." + payload_b64)` と署名が一致。比較は定数時間
-  6. payload に `exp` があり、`now > exp + leeway` でない。`exp` 無しは 401
-  7. `nbf` があれば `now + leeway >= nbf`
+  5. `HMAC-SHA256(secret, header_b64 + "." + payload_b64)` と署名が一致。比較は定数時間。
+     HMAC の計算に失敗した場合と、計算結果が 32 バイトでない場合は 401（空署名として通さない）
+  6. payload に `exp` があり、`now > exp + leeway` でない。`exp` 無しは 401。
+     `exp` は int64 秒の整数のみ。小数・範囲外・非数値は 401。加算は飽和させ、溢れない
+  7. `nbf` があれば `now + leeway >= nbf`。`nbf` の型と範囲は `exp` と同じ
   8. `issuer` 設定時は `iss` が一致
   9. `audience` 設定時は `aud` が一致（文字列、または配列に含む）
 - 失敗はすべて 401 `{"unauthorized"}` + `WWW-Authenticate: Bearer`。どの検査で落ちたかは返さない
 - 通ったら `Claims` を Request Extension に入れる。寿命は Request
-- `secret` が空なら `jwt()` が投げる（`tls()` と同じく設定時に落とす）
+- `secret` が空、または `leeway` が負なら `jwt()` が投げる（`tls()` と同じく設定時に落とす）
 - 適用範囲は `Router::group` で絞る。除外パスの設定項目は持たない
 - RS256 / ES256 / JWKS / 鍵回転 / トークン発行 / 認可判定はしない
 - トークンは `Authorization` からだけ取る。Cookie や query からは取らない

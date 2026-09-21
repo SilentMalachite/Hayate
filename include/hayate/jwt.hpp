@@ -21,6 +21,7 @@ struct Jwt {
     std::string issuer;
     // 空なら aud を見ない。
     std::string audience;
+    // 負なら jwt() が投げる。
     std::chrono::seconds leeway{0};
 };
 
