@@ -22,6 +22,7 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <utility>
 
 namespace http = boost::beast::http;
 namespace fs = std::filesystem;
@@ -157,6 +158,42 @@ TEST(Static, IndexHtml) {
     EXPECT_EQ(r.status, 200);
     EXPECT_EQ(r.body, "<h1>ok</h1>");
     EXPECT_NE(r.content_type.find("text/html"), std::string::npos);
+}
+
+TEST(Static, SubdirectoryIndex) {
+    TempDir root;
+    fs::create_directory(root.dir / "sub");
+    {
+        std::ofstream out(root.dir / "sub" / "index.html");
+        out << "sub";
+    }
+    TestServer srv(
+        [&](hayate::App &app) { app.get("/assets/*path", hayate::files(root.dir.string())); });
+    auto r = http_call("127.0.0.1", srv.port(), http::verb::get, "/assets/sub");
+    EXPECT_EQ(r.status, 200);
+    EXPECT_EQ(r.body, "sub");
+}
+
+// 拡張子の大小は見ない。
+TEST(Static, ContentTypes) {
+    TempDir root;
+    const std::pair<const char *, const char *> cases[] = {
+        {"a.css", "text/css"},          {"a.js", "application/javascript"},
+        {"a.json", "application/json"}, {"a.htm", "text/html"},
+        {"b.HTML", "text/html"},        {"a.bin", "application/octet-stream"},
+    };
+    for (const auto &[name, type] : cases) {
+        std::ofstream out(root.dir / name);
+        out << "x";
+    }
+    TestServer srv(
+        [&](hayate::App &app) { app.get("/assets/*path", hayate::files(root.dir.string())); });
+    for (const auto &[name, type] : cases) {
+        auto r =
+            http_call("127.0.0.1", srv.port(), http::verb::get, std::string("/assets/") + name);
+        EXPECT_EQ(r.status, 200) << name;
+        EXPECT_EQ(r.content_type.rfind(type, 0), 0u) << name << ": " << r.content_type;
+    }
 }
 
 TEST(Static, HtmlContentType) {

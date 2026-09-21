@@ -541,3 +541,16 @@ TEST(JwtTime, NbfBoundary) {
         << "nbf == now + leeway";
     EXPECT_FALSE(times_ok(Json::object({{"exp", exp}, {"nbf", now + 61}}), now, 60));
 }
+
+// 認証スキームの名前は大小を区別しない（RFC 9110 §11.1）。
+TEST(Jwt, BearerSchemeIsCaseInsensitive) {
+    TestServer srv([](hayate::App &app) { protect(app, base_cfg()); });
+    const auto tok = make_token(hs256_header(),
+                                Json::object({{"sub", "alice"}, {"exp", now_s() + 300}}), kSecret);
+    for (const char *scheme : {"bearer ", "BEARER ", "bEaReR "}) {
+        auto r = http_call("127.0.0.1", srv.port(), http::verb::get, "/me", {}, {},
+                           std::chrono::seconds(2), {{"Authorization", scheme + tok}});
+        EXPECT_EQ(r.status, 200) << scheme;
+        EXPECT_EQ(r.body, "alice") << scheme;
+    }
+}

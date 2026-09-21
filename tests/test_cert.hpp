@@ -18,7 +18,8 @@ class TempCert {
   public:
     enum class Key { ec, rsa };
 
-    explicit TempCert(Key kind = Key::ec) {
+    // password が空でなければ、鍵をそのパスフレーズで暗号化して書く。
+    explicit TempCert(Key kind = Key::ec, const std::string &password = {}) {
         cert_ = dir_.dir / "server.pem";
         key_ = dir_.dir / "server.key";
 
@@ -45,7 +46,12 @@ class TempCert {
         }
 
         write(key_.string(), [&](std::FILE *f) {
-            return PEM_write_PrivateKey(f, pkey.get(), nullptr, nullptr, 0, nullptr, nullptr);
+            if (password.empty()) {
+                return PEM_write_PrivateKey(f, pkey.get(), nullptr, nullptr, 0, nullptr, nullptr);
+            }
+            return PEM_write_PrivateKey(f, pkey.get(), EVP_aes_256_cbc(),
+                                        reinterpret_cast<const unsigned char *>(password.data()),
+                                        static_cast<int>(password.size()), nullptr, nullptr);
         });
         write(cert_.string(), [&](std::FILE *f) { return PEM_write_X509(f, x509.get()); });
     }

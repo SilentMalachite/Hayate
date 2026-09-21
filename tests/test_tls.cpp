@@ -299,3 +299,32 @@ TEST(Tls, StopClosesIdleKeepAlive) {
     srv.reset();
     EXPECT_LT(std::chrono::steady_clock::now() - t0, std::chrono::seconds(5));
 }
+
+TEST(Tls, EncryptedKeyWithPassword) {
+    TempCert cert(TempCert::Key::ec, "s3cret");
+    TestServer srv([&](hayate::App &app) {
+        app.tls({.cert_file = cert.cert().string(),
+                 .key_file = cert.key().string(),
+                 .key_password = "s3cret"});
+        app.get("/", [](hayate::Request &) { return hayate::Response::text("ok"); });
+    });
+    auto r = https_call("127.0.0.1", srv.port(), http::verb::get, "/");
+    EXPECT_EQ(r.status, 200) << r.error_message;
+    hayate::App wrong;
+    EXPECT_THROW(wrong.tls({.cert_file = cert.cert().string(),
+                            .key_file = cert.key().string(),
+                            .key_password = "nope"}),
+                 std::exception);
+}
+
+// peer は TLS の下の TCP の相手。
+TEST(Tls, PeerIsRemoteIp) {
+    TempCert cert;
+    TestServer srv([&](hayate::App &app) {
+        app.tls({.cert_file = cert.cert().string(), .key_file = cert.key().string()});
+        app.get("/", [](hayate::Request &req) { return hayate::Response::text(req.peer()); });
+    });
+    auto r = https_call("127.0.0.1", srv.port(), http::verb::get, "/");
+    EXPECT_EQ(r.status, 200) << r.error_message;
+    EXPECT_EQ(r.body, "127.0.0.1");
+}
