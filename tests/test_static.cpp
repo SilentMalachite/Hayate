@@ -257,6 +257,53 @@ TEST(Static, FsTimeoutIs503) {
     drained.get_future().wait();
 }
 
+// 期限切れで置いていった仕事がプールを持つと、プールが App より長く生き、仕事の完了が壊れた
+// io_context に post される。プールを持つのはハンドラと送出中の FileSource だけ。
+TEST(Static, AbandonedStatDoesNotOwnPool) {
+    TempDir root;
+    {
+        std::ofstream out(root.dir / "a.txt");
+        out << "a";
+    }
+    std::promise<void> started;
+    std::promise<void> unblock;
+    std::weak_ptr<boost::asio::thread_pool> weak_pool;
+    TestServer srv([&](hayate::App &app) {
+        auto pool = std::make_shared<boost::asio::thread_pool>(1);
+        weak_pool = pool;
+        boost::asio::post(*pool, [&started, blocked = unblock.get_future()] {
+            started.set_value();
+            blocked.wait();
+        });
+        app.get("/assets/*path", hayate::detail::files_on(fs::canonical(root.dir), 0,
+                                                          std::chrono::milliseconds(100), pool));
+    });
+    struct Unblock {
+        std::promise<void> &p;
+        bool done{false};
+        void operator()() {
+            if (!done) {
+                done = true;
+                p.set_value();
+            }
+        }
+        ~Unblock() { (*this)(); }
+    } release{unblock};
+    started.get_future().wait();
+    const auto owners = weak_pool.use_count();
+    ASSERT_EQ(http_call("127.0.0.1", srv.port(), http::verb::get, "/assets/a.txt").status, 503);
+    // 置いていった stat はまだプールの列にいる。それでも持ち主は増えない。
+    EXPECT_EQ(weak_pool.use_count(), owners);
+    release();
+    std::promise<void> drained;
+    if (auto pool = weak_pool.lock()) {
+        boost::asio::post(*pool, [&drained] { drained.set_value(); });
+    } else {
+        drained.set_value();
+    }
+    drained.get_future().wait();
+}
+
 // 0 本のプールでは何も走らず、すべて 503 になる。1 本に切り上げる。
 TEST(Static, ZeroIoThreadsStillServes) {
     TempDir root;
