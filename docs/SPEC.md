@@ -158,6 +158,9 @@ Phase 3（metrics）
 - テスト: GoogleTest。実装の前に失敗するテスト。ループバック + エフェメラルポート。スリープ同期しない。
   テスト用クライアントは非同期 I/O で期限を効かせ（Beast の期限は同期 I/O に効かない）、CTest にも TIMEOUT を置く
 - 依存: Boost と OpenSSL は `find_package`。nlohmann/json と GoogleTest は FetchContent。vcpkg は使わない
+- 配布: 注釈付きタグのソースだけ。取り込みは FetchContent / `add_subdirectory` で、ターゲットは `hayate::hayate`。
+  install / export は無い（nlohmann/json を FetchContent で持つので、`find_dependency` で解く経路まで要る）
+- 版: SemVer。0.x の間はマイナーで公開 API を壊してよい。パッチでは壊さない
 - 所有: Request が要求の文字列（target・ヘッダ・本文）を持ち、アクセサは `string_view` / `span<const byte>` を返す。寿命は Request
 - スレッド: io_context あたり 1。`app.threads(n)` で複数。共有可変は strand か mutex を書いてから
 - 並行の単位は接続。1 接続 1 strand で直列、異なる接続は並行に走る

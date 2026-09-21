@@ -43,8 +43,8 @@ multipart / WebSocket / SSE / gzip は**実装しない**。
 ```bash
 # macOS
 brew install boost openssl@3 cmake ninja
-# Debian / Ubuntu
-apt install libboost-dev libssl-dev cmake ninja-build
+# Ubuntu 24.04 以降（libboost-dev は古い版を指すことがあるので 1.83 を名指しする）
+apt install libboost1.83-dev libssl-dev cmake ninja-build
 ```
 
 ## ビルドとテスト
@@ -66,6 +66,24 @@ cmake -S . -B build/lsan -G Ninja -DCMAKE_BUILD_TYPE=Debug \
   -DHAYATE_ENABLE_SANITIZERS=ON -DHAYATE_BUILD_TESTS=ON
 cmake --build build/lsan && ASAN_OPTIONS=detect_leaks=1 ctest --test-dir build/lsan
 ```
+
+## 取り込み
+
+FetchContent か `add_subdirectory` で取り込み、`hayate::hayate` にリンクする。install / `find_package` は無い。
+
+```cmake
+include(FetchContent)
+FetchContent_Declare(hayate
+    GIT_REPOSITORY https://github.com/SilentMalachite/Hayate.git
+    GIT_TAG v0.1.0
+    GIT_SHALLOW TRUE)
+FetchContent_MakeAvailable(hayate)
+target_link_libraries(app PRIVATE hayate::hayate)
+```
+
+C++20 は `hayate::hayate` から伝わる。Boost と OpenSSL は利用側の環境から `find_package` で探す。
+
+版は SemVer。0.x の間はマイナーで公開 API が変わり得る。パッチでは変えない。
 
 ## できること
 

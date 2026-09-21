@@ -44,6 +44,7 @@ add_library(hayate
     src/files.cpp
     src/jwt.cpp
 )
+add_library(hayate::hayate ALIAS hayate)
 target_include_directories(hayate PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
 )
@@ -71,7 +72,7 @@ endif()
 
 if(HAYATE_BUILD_EXAMPLES)
     add_executable(hello examples/hello/main.cpp)
-    target_link_libraries(hello PRIVATE hayate)
+    target_link_libraries(hello PRIVATE hayate::hayate)
 endif()
 
 if(HAYATE_BUILD_TESTS)
@@ -102,7 +103,7 @@ if(HAYATE_BUILD_TESTS)
         tests/test_http.cpp
     )
     target_include_directories(hayate_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-    target_link_libraries(hayate_tests PRIVATE hayate GTest::gtest_main)
+    target_link_libraries(hayate_tests PRIVATE hayate::hayate GTest::gtest_main)
     include(GoogleTest)
     # 退行でサーバーが黙っても ctest が止まり続けないための上限。
     gtest_discover_tests(hayate_tests PROPERTIES TIMEOUT 60)
