@@ -1,5 +1,6 @@
 #include "connection.hpp"
 #include "detail/offload.hpp"
+#include "detail/open_file.hpp"
 #include "detail/percent.hpp"
 
 #include <hayate/error.hpp>
@@ -145,13 +146,7 @@ class Connection : public std::enable_shared_from_this<Connection<Stream>> {
     // 返り値 false は「接続をもう使えない」。ヘッダを送った後は status を直せない。
     net::awaitable<bool> write_file(const Response &res, unsigned version, bool keep) {
         const auto *src = res.file_source();
-        beast::file f;
-        const auto oec = co_await detail::offload(*src->pool, [&] {
-            boost::system::error_code ec;
-            f.open(src->path.string().c_str(), beast::file_mode::scan, ec);
-            return ec;
-        });
-        if (oec) {
+        if (!src->file) {
             co_return false;
         }
         http::response<http::buffer_body> out{http::status(res.status()), version};
@@ -159,23 +154,28 @@ class Connection : public std::enable_shared_from_this<Connection<Stream>> {
         res.for_each_header([&](std::string_view k, std::string_view v) { out.set(k, v); });
         out.content_length(src->size);
         http::response_serializer<http::buffer_body> sr{out};
-        std::vector<char> buf(chunk_bytes);
+        // 期限切れで待つのをやめてもワーカーが書き続ける。バッファとファイルは
+        // 共有で持ち、ラムダに値で渡す。
+        auto file = src->file;
+        auto buf = std::make_shared<std::vector<char>>(chunk_bytes);
         std::uint64_t left = src->size;
         for (;;) {
             std::size_t n = 0;
             if (left > 0) {
                 const auto want =
-                    static_cast<std::size_t>(std::min<std::uint64_t>(buf.size(), left));
-                n = co_await detail::offload(*src->pool, [&] {
-                    boost::system::error_code rec;
-                    return f.read(buf.data(), want, rec);
-                });
-                // stat より縮んだ / 読めない。Content-Length を満たせないので打ち切る。
-                if (n == 0) {
+                    static_cast<std::size_t>(std::min<std::uint64_t>(buf->size(), left));
+                const auto got = co_await detail::offload_until(
+                    *src->pool, limits_.read_timeout, [file, buf, want] {
+                        boost::system::error_code rec;
+                        return file->f.read(buf->data(), want, rec);
+                    });
+                // 期限切れ、stat より縮んだ、読めない。Content-Length を満たせないので打ち切る。
+                if (!got || *got == 0) {
                     co_return false;
                 }
+                n = *got;
             }
-            out.body().data = buf.data();
+            out.body().data = buf->data();
             out.body().size = n;
             left -= n;
             out.body().more = left > 0;

@@ -1,8 +1,10 @@
 #include "detail/ascii.hpp"
 #include "detail/offload.hpp"
+#include "detail/open_file.hpp"
 
 #include <hayate/files.hpp>
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -18,15 +20,10 @@ namespace {
 
 Response not_found() { return Response::from_error({"not_found", "Not Found", 404}); }
 
-bool contained(const fs::path &root, const fs::path &cand) {
-    const auto r = root.native();
-    const auto c = cand.native();
-    if (c == r) {
-        return true;
-    }
-    const auto sep = static_cast<fs::path::value_type>(fs::path::preferred_separator);
-    return c.size() > r.size() && c.compare(0, r.size(), r) == 0 && c[r.size()] == sep;
-}
+// FS が期限内に返らなかった。存在の有無ではなくサーバー側の事情なので 503。
+Response unavailable() { return Response::from_error({"unavailable", "Service Unavailable", 503}); }
+
+using detail::contained;
 
 std::string mime_type(const fs::path &p) {
     const auto ext = detail::lower_copy(p.extension().string());
@@ -67,27 +64,26 @@ Response stat_blocking(const fs::path &root, const std::string &raw, std::uint64
     if (canon_ec || !contained(root, resolved)) {
         return not_found();
     }
-    std::error_code file_ec;
-    if (!fs::is_regular_file(target, file_ec)) {
-        return not_found();
-    }
-    std::error_code size_ec;
-    const auto size = fs::file_size(target, size_ec);
-    if (size_ec) {
+    // ここで開き切る。判定した fd をそのまま送るので、送出までの間に
+    // symlink を差し替えられても効かない。種別・サイズも fd から取る。
+    auto opened = detail::open_verified(root, resolved);
+    if (!opened) {
         return not_found();
     }
     // max_bytes は配布上限。0 は無制限。メモリはサイズに依らず一定。
-    if (max_bytes != 0 && size > max_bytes) {
+    if (max_bytes != 0 && opened->size > max_bytes) {
         return not_found();
     }
-    auto res = Response::file({std::move(target), size, std::move(pool)});
+    auto res = Response::file(
+        {std::move(resolved), opened->size, std::move(pool), std::move(opened->file)});
     res.set_header("Content-Type", mime_type(res.file_source()->path));
     return res;
 }
 
 } // namespace
 
-Handler files(std::string_view root, std::uint64_t max_bytes, std::uint32_t io_threads) {
+Handler files(std::string_view root, std::uint64_t max_bytes, std::uint32_t io_threads,
+              std::chrono::milliseconds fs_timeout) {
     fs::path root_path = fs::weakly_canonical(fs::path{std::string(root)});
     // root が未作成だと weakly_canonical が末尾 separator を残し、contained() が常に偽になる。
     if (root_path.filename().empty() && root_path.parent_path() != root_path) {
@@ -95,7 +91,7 @@ Handler files(std::string_view root, std::uint64_t max_bytes, std::uint32_t io_t
     }
     // FS 呼び出しは io スレッドから外す。Handler はコピー可能が要るので shared_ptr で持つ。
     auto pool = std::make_shared<net::thread_pool>(io_threads == 0 ? 1 : io_threads);
-    return [root_path = std::move(root_path), max_bytes,
+    return [root_path = std::move(root_path), max_bytes, fs_timeout,
             pool = std::move(pool)](Request &req) -> net::awaitable<Response> {
         // view はスレッドをまたがせない。プールへ渡す前にコピーする。
         const std::string raw(req.param("path"));
@@ -103,9 +99,15 @@ Handler files(std::string_view root, std::uint64_t max_bytes, std::uint32_t io_t
         if (raw.find('\0') != std::string::npos || fs::path{raw}.is_absolute()) {
             co_return not_found();
         }
-        co_return co_await detail::offload(*pool, [root_path, raw, max_bytes, pool] {
-            return stat_blocking(root_path, raw, max_bytes, pool);
-        });
+        // FS が返らない・プールが詰まっているときに接続を抱えない。
+        auto res =
+            co_await detail::offload_until(*pool, fs_timeout, [root_path, raw, max_bytes, pool] {
+                return stat_blocking(root_path, raw, max_bytes, pool);
+            });
+        if (!res) {
+            co_return unavailable();
+        }
+        co_return std::move(*res);
     };
 }
 

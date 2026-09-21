@@ -5,9 +5,16 @@
 
 #include <gtest/gtest.h>
 
+#include <sys/stat.h>
+
+#include <atomic>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <future>
+#include <memory>
 #include <string>
+#include <thread>
 
 namespace http = boost::beast::http;
 namespace fs = std::filesystem;
@@ -67,6 +74,87 @@ TEST(Static, PathTraversalIs404) {
     EXPECT_EQ(r.status, 404);
     std::error_code ec;
     fs::remove(secret, ec);
+}
+
+// root 内の symlink が root 外を指すなら、存在を漏らさず 404。
+TEST(Static, SymlinkEscapingRootIs404) {
+    StaticDir root;
+    const auto secret = root.dir.parent_path() / ("hayate_secret_" + root.dir.filename().string());
+    {
+        std::ofstream out(secret);
+        out << "secret";
+    }
+    std::error_code link_ec;
+    fs::create_symlink(secret, root.dir / "link.txt", link_ec);
+    ASSERT_FALSE(link_ec);
+    TestServer srv(
+        [&](hayate::App &app) { app.get("/assets/*path", hayate::files(root.dir.string())); });
+    auto r = http_call("127.0.0.1", srv.port(), http::verb::get, "/assets/link.txt");
+    EXPECT_EQ(r.status, 404);
+    EXPECT_EQ(r.body.find("secret"), std::string::npos);
+    std::error_code ec;
+    fs::remove(secret, ec);
+}
+
+// 検査を通ったファイルが、送出前に root 外への symlink へ差し替えられても、
+// 送るのは検査したバイト列であること。
+TEST(Static, SwapAfterStatStillServesVerifiedBytes) {
+    StaticDir root;
+    const auto secret = root.dir.parent_path() / ("hayate_secret_" + root.dir.filename().string());
+    {
+        std::ofstream out(secret);
+        out << "secret";
+    }
+    {
+        std::ofstream out(root.dir / "a.txt");
+        out << "public";
+    }
+    std::promise<void> in_gate;
+    std::promise<void> release;
+    auto gate_hit = std::make_shared<std::atomic<bool>>(false);
+    TestServer srv([&](hayate::App &app) {
+        app.use([&](hayate::Request &req,
+                    hayate::Next next) -> boost::asio::awaitable<hayate::Response> {
+            auto res = co_await next(req);
+            // ハンドラは終わり、まだ送っていない。ここで差し替えられる。
+            if (!gate_hit->exchange(true)) {
+                in_gate.set_value();
+                release.get_future().wait();
+            }
+            co_return res;
+        });
+        app.get("/assets/*path", hayate::files(root.dir.string()));
+    });
+    std::promise<HttpCall> done;
+    std::thread caller([&] {
+        done.set_value(http_call("127.0.0.1", srv.port(), http::verb::get, "/assets/a.txt", {}, {},
+                                 std::chrono::seconds(10)));
+    });
+    in_gate.get_future().wait();
+    std::error_code ec;
+    fs::remove(root.dir / "a.txt", ec);
+    fs::create_symlink(secret, root.dir / "a.txt", ec);
+    ASSERT_FALSE(ec);
+    release.set_value();
+    auto r = done.get_future().get();
+    caller.join();
+    EXPECT_EQ(r.body, "public");
+    EXPECT_NE(r.body, "secret");
+    fs::remove(secret, ec);
+}
+
+// FIFO は通常ファイルではない。書き手が居なくても待たされずに 404。
+TEST(Static, FifoIsNotServedAndDoesNotHang) {
+    StaticDir root;
+    const auto fifo = root.dir / "pipe";
+    ASSERT_EQ(::mkfifo(fifo.c_str(), 0600), 0);
+    TestServer srv(
+        [&](hayate::App &app) { app.get("/assets/*path", hayate::files(root.dir.string())); });
+    const auto began = std::chrono::steady_clock::now();
+    auto r = http_call("127.0.0.1", srv.port(), http::verb::get, "/assets/pipe", {}, {},
+                       std::chrono::seconds(3));
+    EXPECT_EQ(r.status, 404);
+    EXPECT_LT(std::chrono::steady_clock::now() - began, std::chrono::seconds(3));
 }
 
 TEST(Static, IndexHtml) {

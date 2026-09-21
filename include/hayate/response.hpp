@@ -16,13 +16,21 @@
 
 namespace hayate {
 
+namespace detail {
+// 検証済みの開いたファイル。定義は src/detail/open_file.hpp（OS の型を公開ヘッダに出さない）。
+struct OpenFile;
+} // namespace detail
+
 class Response {
   public:
     // 全文をメモリに積まずに送るファイル。読みは pool で走らせる。
     struct FileSource {
+        // Content-Type の判定に使う。送出時にこのパスを辿り直さない。
         std::filesystem::path path;
         std::uint64_t size{0};
         std::shared_ptr<boost::asio::thread_pool> pool;
+        // root 内であることを確かめた上で開いたファイル。送るのはこれ。
+        std::shared_ptr<detail::OpenFile> file;
     };
 
     std::uint16_t status() const noexcept;
