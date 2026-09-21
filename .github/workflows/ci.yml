@@ -19,16 +19,16 @@ concurrency:
 
 jobs:
   linux:
-    # 約束している最低版（GCC 12 / Clang 16）と Boost 1.83 が apt で揃う。
+    # 約束している最低版（GCC 13 / Clang 16）と Boost 1.83 が apt で揃う。
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
-        cxx: [g++-12, clang++-16]
+        cxx: [g++-13, clang++-16]
         preset: [test, tsan]
         include:
-          - cxx: g++-12
-            pkgs: g++-12
+          - cxx: g++-13
+            pkgs: g++-13
           - cxx: clang++-16
             pkgs: clang-16 libclang-rt-16-dev
     env:
