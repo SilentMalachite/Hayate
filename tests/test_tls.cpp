@@ -1,5 +1,6 @@
 #include "http_client.hpp"
 #include "https_client.hpp"
+#include "temp_dir.hpp"
 #include "test_cert.hpp"
 #include "test_server.hpp"
 
@@ -76,8 +77,8 @@ TEST(Tls, MissingCertFileThrows) {
 
 TEST(Tls, StaticFileOverTls) {
     TempCert cert;
-    const auto dir = fs::temp_directory_path() / "hayate_tls_static";
-    fs::create_directories(dir);
+    TempDir tmp;
+    const auto &dir = tmp.dir;
     const std::string want(200 * 1024, 'z');
     {
         std::ofstream out(dir / "big.bin", std::ios::binary);
@@ -92,6 +93,4 @@ TEST(Tls, StaticFileOverTls) {
     EXPECT_EQ(r.status, 200) << r.error_message;
     EXPECT_EQ(r.body.size(), want.size());
     EXPECT_EQ(r.extra["Content-Length"], std::to_string(want.size()));
-    std::error_code ec;
-    fs::remove_all(dir, ec);
 }

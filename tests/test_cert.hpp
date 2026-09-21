@@ -1,5 +1,7 @@
 #pragma once
 
+#include "temp_dir.hpp"
+
 #include <openssl/evp.h>
 #include <openssl/pem.h>
 #include <openssl/x509.h>
@@ -14,12 +16,8 @@
 class TempCert {
   public:
     TempCert() {
-        namespace fs = std::filesystem;
-        dir_ = fs::temp_directory_path() /
-               ("hayate_cert_" + std::to_string(reinterpret_cast<std::uintptr_t>(this)));
-        fs::create_directories(dir_);
-        cert_ = dir_ / "server.pem";
-        key_ = dir_ / "server.key";
+        cert_ = dir_.dir / "server.pem";
+        key_ = dir_.dir / "server.key";
 
         std::unique_ptr<EVP_PKEY, decltype(&EVP_PKEY_free)> pkey(EVP_EC_gen("prime256v1"),
                                                                  &EVP_PKEY_free);
@@ -49,11 +47,6 @@ class TempCert {
         write(cert_.string(), [&](std::FILE *f) { return PEM_write_X509(f, x509.get()); });
     }
 
-    ~TempCert() {
-        std::error_code ec;
-        std::filesystem::remove_all(dir_, ec);
-    }
-
     const std::filesystem::path &cert() const { return cert_; }
     const std::filesystem::path &key() const { return key_; }
 
@@ -66,7 +59,7 @@ class TempCert {
         }
     }
 
-    std::filesystem::path dir_;
+    TempDir dir_;
     std::filesystem::path cert_;
     std::filesystem::path key_;
 };
