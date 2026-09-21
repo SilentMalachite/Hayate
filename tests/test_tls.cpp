@@ -37,24 +37,17 @@ TEST(Tls, KeepAliveOverTls) {
         app.tls({.cert_file = cert.cert().string(), .key_file = cert.key().string()});
         app.get("/", [](hayate::Request &) { return hayate::Response::text("ok"); });
     });
-    namespace net = boost::asio;
-    namespace beast = boost::beast;
-    net::io_context ioc;
     auto ctx = test_client_ctx();
-    beast::ssl_stream<beast::tcp_stream> stream{ioc, ctx};
-    beast::get_lowest_layer(stream).expires_after(std::chrono::seconds(5));
-    beast::get_lowest_layer(stream).connect(
-        net::ip::tcp::endpoint(net::ip::make_address("127.0.0.1"), srv.port()));
-    stream.handshake(net::ssl::stream_base::client);
-    beast::flat_buffer buf;
-    auto send = [&] {
-        beast::get_lowest_layer(stream).expires_after(std::chrono::seconds(5));
+    TlsConn c(srv.port(), ctx, std::chrono::seconds(5));
+    ASSERT_FALSE(c.connect_error()) << c.connect_error().message();
+    auto send = [&]() -> std::string {
         http::request<http::string_body> req{http::verb::get, "/", 11};
         req.set(http::field::host, "127.0.0.1");
         req.keep_alive(true);
-        http::write(stream, req);
         http::response<http::string_body> res;
-        http::read(stream, buf, res);
+        if (c.write(req, std::chrono::seconds(5)) || c.read(res, std::chrono::seconds(5))) {
+            return {};
+        }
         return res.body();
     };
     EXPECT_EQ(send(), "ok");
