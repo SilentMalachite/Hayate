@@ -1,3 +1,4 @@
+#include "conn_client.hpp"
 #include "http_client.hpp"
 #include "test_server.hpp"
 
@@ -54,20 +55,16 @@ TEST(RateLimit, KeepAliveRequestsShareOnePeerKey) {
         app.use(hayate::mw::rate_limit({.max = 1, .window = std::chrono::seconds(60)}));
         app.get("/", [](hayate::Request &) { return hayate::Response::text("ok"); });
     });
-    namespace net = boost::asio;
-    net::io_context ioc;
-    boost::beast::tcp_stream stream(ioc);
-    stream.expires_after(std::chrono::seconds(2));
-    stream.connect(net::ip::tcp::endpoint(net::ip::make_address("127.0.0.1"), srv.port()));
-    boost::beast::flat_buffer buf;
-    auto send = [&] {
-        stream.expires_after(std::chrono::seconds(2));
+    Conn c(srv.port());
+    // 失敗は 0。既定の応答は 200 なので、失敗をそのまま返すと通ったように見える。
+    auto send = [&]() -> unsigned {
         http::request<http::string_body> req{http::verb::get, "/", 11};
         req.set(http::field::host, "127.0.0.1");
         req.keep_alive(true);
-        http::write(stream, req);
         http::response<http::string_body> res;
-        http::read(stream, buf, res);
+        if (c.write(req) || c.read(res)) {
+            return 0;
+        }
         return res.result_int();
     };
     EXPECT_EQ(send(), 200u);

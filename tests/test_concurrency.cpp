@@ -1,3 +1,4 @@
+#include "conn_client.hpp"
 #include "http_client.hpp"
 #include "test_server.hpp"
 
@@ -18,25 +19,22 @@
 #include <vector>
 
 namespace http = boost::beast::http;
-namespace net = boost::asio;
 
 namespace {
 
-// 同じ接続で keep-alive のまま n 本投げる。timeout は client 側の保険。
+// 同じ接続で keep-alive のまま n 本投げる。timeout は client 側の保険。失敗は空。
 std::string pipeline_on_one_connection(std::uint16_t port, int n) {
-    net::io_context ioc;
-    boost::beast::tcp_stream stream(ioc);
-    stream.expires_after(std::chrono::seconds(10));
-    stream.connect(net::ip::tcp::endpoint(net::ip::make_address("127.0.0.1"), port));
+    constexpr auto limit = std::chrono::seconds(10);
+    Conn c(port, limit);
     std::string last;
     for (int i = 0; i < n; ++i) {
         http::request<http::string_body> req{http::verb::get, "/echo", 11};
         req.set(http::field::host, "127.0.0.1");
         req.keep_alive(i + 1 < n);
-        http::write(stream, req);
-        boost::beast::flat_buffer buf;
         http::response<http::string_body> res;
-        http::read(stream, buf, res);
+        if (c.write(req, limit) || c.read(res, limit)) {
+            return {};
+        }
         last = res.body();
     }
     return last;
@@ -106,25 +104,16 @@ TEST(Concurrency, IdleTimerRunsWithReads) {
         first_ok.emplace_back(p.get_future());
         threads.emplace_back([&srv, &start, p = std::move(p)]() mutable {
             start.arrive_and_wait();
-            net::io_context ioc;
-            boost::beast::tcp_stream stream(ioc);
-            stream.expires_after(std::chrono::seconds(10));
-            stream.connect(net::ip::tcp::endpoint(net::ip::make_address("127.0.0.1"), srv.port()));
+            constexpr auto limit = std::chrono::seconds(10);
+            Conn c(srv.port(), limit);
             bool ok = false;
             // 期限切れで閉じられるまで keep-alive で投げ続ける。閉じられるのは正常。
             for (int i = 0; i < 16; ++i) {
                 http::request<http::string_body> req{http::verb::get, "/echo", 11};
                 req.set(http::field::host, "127.0.0.1");
                 req.keep_alive(true);
-                boost::system::error_code ec;
-                http::write(stream, req, ec);
-                if (ec) {
-                    break;
-                }
-                boost::beast::flat_buffer buf;
                 http::response<http::string_body> res;
-                http::read(stream, buf, res, ec);
-                if (ec) {
+                if (c.write(req, limit) || c.read(res, limit)) {
                     break;
                 }
                 if (i == 0) {
