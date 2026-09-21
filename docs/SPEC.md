@@ -297,6 +297,8 @@ app.get("/openapi.json", [&app](hayate::Request &) {
   **body / response のスキーマは出さない**（Router が型情報を持っていない）
 - `:name` → `{name}`、`*name` → `{name}` + `x-hayate-wildcard: true`
   （OpenAPI の `{}` は本来 `/` を含まないので、違いを機械可読な形で残す）
+- 静的セグメントは RFC 3986 の pchar 以外（`{` `}` `%` を含む）を percent-encode する。
+  静的な `{id}` がテンプレート変数に化けず、`/a/{}` と `/a/:x` が同じ形にまとまらない
 - path パラメータは `in: path` / `required: true` / `schema: {type: string}`
 - 同じパスの GET と POST は 1 つの path 項目にまとまる
 - 形が同じでパラメータ名だけ違うパス（`/users/:id` と `/users/:name`）も 1 つにまとめる。

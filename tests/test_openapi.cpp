@@ -68,6 +68,29 @@ TEST(Openapi, SameShapeDifferentParamNamesMerge) {
     EXPECT_EQ(item.at("post").at("parameters").at(0).value("name", ""), "id");
 }
 
+// 静的セグメントの `{}` をそのまま出すと、parameter 定義の無いテンプレート変数になる。
+TEST(Openapi, StaticBracesAreEncoded) {
+    hayate::App app;
+    app.get("/literal/{id}", ok);
+    const auto doc = hayate::openapi(app);
+    const auto &paths = doc.at("paths");
+    EXPECT_FALSE(paths.contains("/literal/{id}")) << paths.dump();
+    ASSERT_TRUE(paths.contains("/literal/%7Bid%7D")) << paths.dump();
+    EXPECT_FALSE(paths.at("/literal/%7Bid%7D").at("get").contains("parameters"));
+}
+
+// 静的な `{}` と param は形が同じに見える。別のパスとして残す。
+TEST(Openapi, StaticBracesDoNotMergeWithParam) {
+    hayate::App app;
+    app.get("/a/{}", ok);
+    app.post("/a/:x", ok);
+    const auto doc = hayate::openapi(app);
+    const auto &paths = doc.at("paths");
+    EXPECT_EQ(paths.size(), 2u) << paths.dump();
+    EXPECT_TRUE(paths.contains("/a/%7B%7D")) << paths.dump();
+    EXPECT_TRUE(paths.contains("/a/{x}")) << paths.dump();
+}
+
 TEST(Openapi, UnregisteredMethodIsAbsent) {
     hayate::App app;
     app.get("/users", ok);

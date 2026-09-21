@@ -1,5 +1,7 @@
 #pragma once
 
+#include "percent.hpp"
+
 #include <hayate/http.hpp>
 #include <hayate/openapi.hpp>
 
@@ -42,8 +44,10 @@ inline PathDoc split_pattern(std::string_view pattern) {
             out.shape += part.front() == '*' ? "{*}" : "{}";
             out.params.emplace_back(name, part.front() == '*');
         } else {
-            out.path.append(part);
-            out.shape.append(part);
+            // 静的な `{id}` をそのまま出すとテンプレート変数に化け、形も param と同じになる。
+            const auto lit = percent_encode_pchar(part);
+            out.path += lit;
+            out.shape += lit;
         }
         if (slash == std::string_view::npos) {
             break;
