@@ -249,6 +249,21 @@ TEST(Router, DuplicateShapeThrows) {
     }
 }
 
+// 登録できるのは GET と POST だけ。unknown のルートは HEAD や PUT に一致してしまう。
+TEST(Router, AddRejectsOtherMethods) {
+    auto h = [](hayate::Request &) -> boost::asio::awaitable<hayate::Response> {
+        co_return hayate::Response::text("x");
+    };
+    hayate::Router r;
+    EXPECT_THROW(r.add(hayate::HttpMethod::options, "/x", h), std::invalid_argument);
+    EXPECT_THROW(r.add(hayate::HttpMethod::unknown, "/x", h), std::invalid_argument);
+    EXPECT_NO_THROW(r.add(hayate::HttpMethod::get, "/x", h));
+    hayate::App app;
+    EXPECT_THROW(
+        app.group("/g", [&](hayate::Router &g) { g.add(hayate::HttpMethod::unknown, "/x", h); }),
+        std::invalid_argument);
+}
+
 // 名前の無い param / wildcard と途中の wildcard は、一致する要求が無いか名前で引けない。
 TEST(Router, MalformedPatternThrows) {
     auto h = [](hayate::Request &) { return hayate::Response::text("x"); };

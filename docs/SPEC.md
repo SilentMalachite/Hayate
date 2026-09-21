@@ -5,7 +5,7 @@
 C++20 の Web サービス用フレームワーク兼 HTTP サーバー **Hayate**（namespace `hayate`）を作る。
 小さく、速く、型が立つ。ハンドラはコルーチン。公開 API は Fluent + concepts。マクロでルートを登録しない。
 
-利用者が書く形（Phase 1。`request_id` は Phase 2）:
+利用者が書く形（Phase 1）:
 
 ```cpp
 #include <hayate/hayate.hpp>
@@ -69,10 +69,32 @@ Phase 1
 - MW が onion（入り A→B、戻り B→A、`next` なし短絡）でテストされている
 - メソッド違いは 405（Allow 付き）、パス無しは 404
 - 過大 body / timeout / shutdown（in-flight 完了・新規拒否）がテストされている
-- TLS / HTTP/2 / ORM / テンプレートがリポジトリに無い
+- HTTP/2 / ORM / テンプレートがリポジトリに無い（TLS は Phase 3 で受け入れた）
 - hello が公開ヘッダだけに依存する
-- debug + ASan で新規リーク・UAF が無い
+- debug + ASan で新規リーク・UAF が無い。macOS の Apple Clang の ASan には LeakSanitizer が無い
+  （`detect_leaks is not supported on this platform`）ので、macOS で見えるのは UAF だけ
 - 頼んでいないファイルが diff に無い
+
+Phase 2（CORS）
+
+- `Origin` 付きの GET に `Access-Control-Allow-Origin` が付き、既定は `*`、設定すればその値
+- `Origin` の無い要求（空の `Origin:` を含む）には `Access-Control-*` が付かない
+- `OPTIONS` + `Origin` が 204 で、`Allow-Methods` / `Allow-Headers` が付き、ハンドラを呼ばない
+- 固定 origin では、`Origin` の有無やエラー応答に関わらず `Vary: Origin` が付く。既存の `Vary` は残る
+- 404 にも `Access-Control-Allow-Origin` が付く
+
+Phase 2（静的ファイル）
+
+- root 内のファイルが拡張子に合った `Content-Type` で返る。ディレクトリは `index.html` を返す
+- 無いファイル・root の外（`..`・絶対パス・root 外への symlink）・NUL 入りのパスは 404
+- `max_bytes` を超えるファイルは 404
+- 登録時に無い root も、後から作れば配られる
+
+Phase 2（レート制限）
+
+- 窓内で `max` を超えると 429 と `Retry-After`（切り上げ、最小 1）
+- キーは接続の peer。`X-Forwarded-For` を変えても同じ窓に入る。keep-alive の要求は同じ窓に入る
+- 窓を過ぎると数え直す。過ぎたキーは掃除される
 
 Phase 3（静的ファイルのストリーミング送出）
 
@@ -118,19 +140,19 @@ Phase 3（metrics）
 ## 技術判断
 
 - 言語: C++20 厳守。`std::expected` は使わない
-- ビルド: CMake 3.28+、Presets `debug` / `release` / `test`。ASan は debug の既定。
+- ビルド: CMake 3.28+、Presets `debug` / `release` / `test` / `tsan`。debug は ASan + UBSan、`tsan` は TSan。
   `test` は `debug` と同じビルドディレクトリ（`--preset debug` の直後に `--build --preset test` が通る）
 - 対象: macOS (Apple Clang) と Linux (GCC 12+ / Clang 16+)。Windows は後追い
 - I/O: Boost.Asio 1.83+。`asio::awaitable` / `co_spawn`。公開ヘッダで `namespace asio = boost::asio;`
 - ファイル I/O: ブロッキング FS 呼び出しは `asio::thread_pool` に逃がす。`asio::stream_file` は `BOOST_ASIO_HAS_FILE`（Windows ハンドル / Linux io_uring）依存で macOS に無いため使わない
-- HTTP / WS: Boost.Beast（HTTP/1.1）
+- HTTP: Boost.Beast（HTTP/1.1）
 - TLS: OpenSSL 3 via `asio::ssl`。`find_package(OpenSSL 3 REQUIRED)`。最低 TLS 1.2
 - JSON: nlohmann/json v3.11.3 1 本。`hayate::Json` は `nlohmann::json` の別名。現行 glaze は C++23 必須のため採用しない。混在禁止
 - エラー: `hayate::Result<T>` は `std::variant<T, Error>` の薄い自前 1 本。Boost.Outcome は使わない
 - テスト: GoogleTest。実装の前に失敗するテスト。ループバック + エフェメラルポート。スリープ同期しない。
   テスト用クライアントは非同期 I/O で期限を効かせ（Beast の期限は同期 I/O に効かない）、CTest にも TIMEOUT を置く
 - 依存: Boost と OpenSSL は `find_package`。nlohmann/json と GoogleTest は FetchContent。vcpkg は使わない
-- 所有: 入力は `string_view` / `span<const byte>`。寿命は Request。足りるならコピーしない
+- 所有: Request が要求の文字列（target・ヘッダ・本文）を持ち、アクセサは `string_view` / `span<const byte>` を返す。寿命は Request
 - スレッド: io_context あたり 1。`app.threads(n)` で複数。共有可変は strand か mutex を書いてから
 - 並行の単位は接続。1 接続 1 strand で直列、異なる接続は並行に走る
 - 禁止: `new`/`delete`/`malloc`、生配列、ハンドラ境界をまたぐ例外、共有可変グローバル
@@ -185,6 +207,8 @@ using Middleware = std::function<asio::awaitable<Response>(Request&, Next)>;
 
 onion: 入りは登録順 A→B、戻りは B→A。`next` を呼ばなければ短絡。
 App の `use()` は 404/405 を含む dispatch 全体を包む（CORS preflight とエラー応答にヘッダが要る）。
+413 / 431 と、送れないヘッダを差し替えた 500 は Router に届く前か後に Connection が作るので、App の MW も
+通らない（CORS のヘッダも付かない）。
 `group` の MW はマッチしたルートにだけ付く。group のパスで出る 404 / 405 はどのルートにも
 マッチしていないので、group の MW を通らない（App の MW だけ）。
 入れ子は App → 外の group → 内の group → ハンドラ。`use()` は呼んだ位置に関係なく、その App / Router の
@@ -193,7 +217,7 @@ App の `use()` は 404/405 を含む dispatch 全体を包む（CORS preflight 
 
 ### ルーティング
 
-- メソッドは `GET` と `POST` のみ
+- メソッドは `GET` と `POST` のみ。`Router::add` に他のメソッドを渡すと `std::invalid_argument` を投げる
 - `:name` は空でない 1 セグメント。`*name` は残り全部（空でも可）で、最後のセグメントにだけ置ける
 - 名前の無い `:` / `*` と、最後以外の `*name` は登録時に `std::invalid_argument` を投げる
 - 欠けた param / query / header は空 `string_view`
@@ -225,6 +249,9 @@ App の `use()` は 404/405 を含む dispatch 全体を包む（CORS preflight 
   何度呼んでもよく、効果は 1 回分
 - `serve()` は `threads(n)`（既定 1）で io_context を blocking 実行する。SIGINT/SIGTERM で `stop()`
 - `stop()` は新規 accept を止め、in-flight の読書きを完了させてから io_context を止める
+- 要求の到着を待っている接続（TLS ハンドシェイク中、1 本目のヘッダ待ち、keep-alive の次のヘッダ待ち）は
+  `stop()` ですぐ閉じる。ヘッダが途中まで来ていても閉じる（要求はまだ完成していない）。ヘッダが揃った
+  要求（本文の読み・ハンドラ・書き込み）は完了させ、`Connection: close` で閉じる
 
 ### Limits 既定
 
@@ -237,7 +264,7 @@ App の `use()` は 404/405 を含む dispatch 全体を包む（CORS preflight 
 | idle_timeout | 60s |
 | max_connections | 1024 |
 
-超過: header 431、body 413。read/write/idle 切れは接続を閉じる（応答を書けなければ書かない）。`max_connections` 超過の新規は accept せず切る。
+超過: header 431、body 413。read/write/idle 切れは接続を閉じる（応答を書けなければ書かない）。`max_connections` 超過の新規は accept してすぐ閉じる（応答は書かない）。
 
 Beast / Asio の失敗は、応答を書ける段階なら `Error` にして応答する（413 / 431 / 500）。書けない段階（timeout・相手の切断・handshake 失敗）なら閉じるだけで、受け取る側のない `Error` は作らない。
 
@@ -262,7 +289,7 @@ HTTP/1.1 の約束:
 - `Response::json(Json)` は 200 / `application/json`
 - `Request::json()` は body を `Json` として読む。破損は `Error{code:"bad_json", http_status:400}`
 - `Request::json<T>()` は型不一致も同じ 400
-- Content-Type 検査は Phase 1 ではしない（body バイトだけ見る）
+- Content-Type 検査はしない（body バイトだけ見る）
 
 ### Response ヘッダ
 
@@ -296,7 +323,8 @@ app.tls({.cert_file = "server.pem", .key_file = "server.key"})
 - 証明書 / 鍵が読めない、または鍵が証明書と対でなければ `tls()` が投げる（`bind()` と同じく設定時に落とす）
 - `key_password` が空なら鍵にパスフレーズ無しとして扱う
 - ハンドシェイクの窓は `read_timeout`。失敗した接続は応答を書かずに閉じる
-- 終了は TLS shutdown → socket shutdown の順。相手の close_notify を待つのは `write_timeout` まで
+- 終了は TLS shutdown → socket shutdown の順。相手の close_notify を待つのは `write_timeout` まで。
+  停止中は close_notify を送るだけで返事を待たない（RFC 8446 §6.1。待つと `serve()` が戻らない）
 - sslv2 / sslv3 / tlsv1 / tlsv1.1 を無効化する。最低 TLS 1.2
 - `Request::peer()` は TLS でも accept 時の remote IP
 
@@ -319,8 +347,9 @@ app.get("/openapi.json", [&app](hayate::Request &) {
   静的な `{id}` がテンプレート変数に化けず、`/a/{}` と `/a/:x` が同じ形にまとまらない
 - path パラメータは `in: path` / `required: true` / `schema: {type: string}`
 - 同じパスの GET と POST は 1 つの path 項目にまとまる
-- 形が同じでパラメータ名だけ違うパス（`/users/:id` と `/users/:name`）も 1 つにまとめる。
-  OpenAPI では同じテンプレートとして扱われるため。キーとパラメータ名は最初に登録したルートのもの
+- 形が同じでパラメータ名だけ違うパス（GET `/users/:id` と POST `/users/:name`）も 1 つにまとめる。
+  OpenAPI では同じテンプレートとして扱われるため。キーとパラメータ名は最初に登録したルートのもの。
+  同じメソッドの同じ形は登録時に投げるので、まとまるのは GET と POST の間だけ
 - 各 operation の `responses` は `default` 1 つだけ。ステータスを知らないので創作しない
 - `group()` の prefix は畳み込まれた形（`/api/users`）で出る
 - 文書の配り方は決めない。ルートに載せるのは利用者の仕事
@@ -343,12 +372,13 @@ app.use(hayate::mw::jwt({.secret = "...", .issuer = "", .audience = "",
   4. header の `alg` が `HS256`（文字列でなければ 401）
   5. `HMAC-SHA256(secret, header_b64 + "." + payload_b64)` と署名が一致。比較は定数時間。
      HMAC の計算に失敗した場合と、計算結果が 32 バイトでない場合は 401（空署名として通さない）
-  6. payload に `exp` があり、`now > exp + leeway` でない。`exp` 無しは 401。
+  6. payload が JSON オブジェクト。`exp` があり、`now > exp + leeway` でない。`exp` 無しは 401。
      `exp` は int64 秒の整数のみ。小数・範囲外・非数値は 401。加算は飽和させ、溢れない
   7. `nbf` があれば `now + leeway >= nbf`。`nbf` の型と範囲は `exp` と同じ
   8. `issuer` 設定時は `iss` が一致（文字列でなければ 401）
   9. `audience` 設定時は `aud` が一致（文字列、または配列に含む）
-- 失敗はすべて 401 `{"unauthorized"}` + `WWW-Authenticate: Bearer`。どの検査で落ちたかは返さない
+- 失敗はすべて 401 + `WWW-Authenticate: Bearer`。本文は `Error{code: "unauthorized"}` から作る
+  text/plain の `Unauthorized`。どの検査で落ちたかは返さない
 - 通ったら `Claims` を Request Extension に入れる。寿命は Request
 - `secret` が空、または `leeway` が負なら `jwt()` が投げる（`tls()` と同じく設定時に落とす）
 - 適用範囲は `Router::group` で絞る。除外パスの設定項目は持たない
@@ -390,8 +420,9 @@ app.use(hayate::mw::cors({.origin = "https://app.example"}));
 ```
 
 - `hayate::mw::cors()` は Middleware。新しい公開型（Service 等）は足さない
-- ルート登録はこれまで通り GET / POST のみ。OPTIONS は preflight 用にフレームワークが扱う
-- `Origin` が無ければ `Access-Control-*` ヘッダを付けない
+- ルート登録はこれまで通り GET / POST のみ。OPTIONS は `mw::cors` を入れたときだけ preflight として扱う
+  （入れなければ 404 / 405）
+- `Origin` が無ければ `Access-Control-*` ヘッダを付けない。空の `Origin:` も無いのと同じ
 - `Origin` がある GET/POST（および 404/405）: `Access-Control-Allow-Origin`（既定 `*`、設定があればその値）
 - `origin` が `*` 以外のときは `Vary: Origin` も付ける（共有キャッシュの取り違え防止）。
   応答が `Origin` の有無で変わるので、`Origin` が無い要求への応答にも付ける
@@ -419,7 +450,7 @@ app.get("/assets/*path", hayate::files("public", 4u * 1024 * 1024, 4));
 - 復号後のパスに NUL が入っていたら 404
 - 無いファイル・ディレクトリで `index.html` も無いときは 404
 - ディレクトリで `index.html` があればそれを返す
-- Content-Type は拡張子（`.html` `text/html`、`.css` `text/css`、`.js` `application/javascript`、`.json` `application/json`、`.txt` `text/plain`、その他 `application/octet-stream`）
+- Content-Type は拡張子（`.html` / `.htm` `text/html`、`.css` `text/css`、`.js` `application/javascript`、`.json` `application/json`、`.txt` `text/plain`、その他 `application/octet-stream`）。拡張子の大小は見ない
 
 I/O モデル:
 
@@ -456,4 +487,5 @@ app.use(hayate::mw::rate_limit({.max = 60, .window = std::chrono::seconds(60)}))
 - 窓内で `max` を超えたら 429。`Retry-After` は窓の残り秒（切り上げ、最小 1）
 - 既定 `max` 60、`window` 60s
 - カウンタは MW が所有する mutex 付き map。グローバル禁止
-- 窓を過ぎたキーは次のリクエスト時に掃除する（map を無制限に太らせない）
+- 窓を過ぎたキーは掃除する（map を無制限に太らせない）。毎回は舐めない。前の掃除から窓 1 つ過ぎた後の
+  最初のリクエストで掃除するので、過ぎたキーはそれまで残る

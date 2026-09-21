@@ -201,6 +201,30 @@ TEST(Http, NoContentDropsHandlerBody) {
     EXPECT_TRUE(res.body().empty());
 }
 
+// 304 も本文を持たない。本文を送ると、次の応答の先頭として読まれる。
+TEST(Http, NotModifiedHasNoBody) {
+    TestServer srv([](hayate::App &app) {
+        app.get("/", [](hayate::Request &) {
+            auto res = hayate::Response::text("stale");
+            res.status(304);
+            return res;
+        });
+        app.get("/next", [](hayate::Request &) { return hayate::Response::text("next"); });
+    });
+    Conn c(srv.port());
+    ASSERT_FALSE(c.connect_error());
+    ASSERT_FALSE(c.write(make_req(http::verb::get, "/", true)));
+    http::response<http::string_body> res;
+    ASSERT_FALSE(c.read(res));
+    EXPECT_EQ(res.result_int(), 304);
+    EXPECT_EQ(res.count(http::field::content_length), 0u);
+    EXPECT_TRUE(res.body().empty());
+    ASSERT_FALSE(c.write(make_req(http::verb::get, "/next", false)));
+    http::response<http::string_body> next;
+    ASSERT_FALSE(c.read(next));
+    EXPECT_EQ(next.body(), "next");
+}
+
 // Beast はヘッダ 1 本が 64 KiB 弱を超えると投げる。投げると応答なしで切れる。
 TEST(Http, OversizedHeaderIs500) {
     TestServer srv([](hayate::App &app) {

@@ -54,6 +54,8 @@ struct App::Impl {
     std::atomic<bool> shutting{false};
     std::atomic<std::uint32_t> connections{0};
     detail::Counters counters;
+    // stop() が、要求の到着を待っている接続を取り消すのに使う。
+    detail::ConnectionSet conns;
 };
 
 App::App() : impl_(std::make_unique<Impl>()) {}
@@ -144,12 +146,13 @@ boost::asio::awaitable<void> App::run() {
             net::co_spawn(conn_ex,
                           serve_connection(detail::tls_stream{std::move(stream), *impl_->ssl_ctx},
                                            impl_->limits, impl_->router, impl_->counters,
-                                           impl_->shutting, std::move(done)),
+                                           impl_->shutting, impl_->conns, std::move(done)),
                           net::detached);
         } else {
             net::co_spawn(conn_ex,
                           serve_connection(std::move(stream), impl_->limits, impl_->router,
-                                           impl_->counters, impl_->shutting, std::move(done)),
+                                           impl_->counters, impl_->shutting, impl_->conns,
+                                           std::move(done)),
                           net::detached);
         }
     }
@@ -186,6 +189,8 @@ void App::stop() {
     // admin strand なので、多重呼び出しも accept ループも直列になる。
     net::post(impl_->admin, [impl = impl_.get()] {
         impl->shutting = true;
+        // 要求を待っているだけの接続は閉じる。始まった要求は Connection が完了させる。
+        impl->conns.cancel_all();
         impl->accepting = false;
         boost::system::error_code ec;
         if (impl->acceptor) {

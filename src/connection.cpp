@@ -46,14 +46,20 @@ net::awaitable<bool> do_handshake(detail::tls_stream &s, std::chrono::millisecon
     co_return !ec;
 }
 
-net::awaitable<void> shutdown_stream(beast::tcp_stream &s, std::chrono::milliseconds) {
+net::awaitable<void> shutdown_stream(beast::tcp_stream &s, std::chrono::milliseconds, bool) {
     boost::system::error_code ignored;
     s.socket().shutdown(tcp::socket::shutdown_send, ignored);
     co_return;
 }
 
-net::awaitable<void> shutdown_stream(detail::tls_stream &s, std::chrono::milliseconds window) {
-    // close_notify を待つので窓が要る。切れていれば即エラーで戻る。
+net::awaitable<void> shutdown_stream(detail::tls_stream &s, std::chrono::milliseconds window,
+                                     bool stopping) {
+    // 停止中は close_notify を送るだけにする。受け取った扱いにしておくと、SSL_shutdown は
+    // 相手の返事を読みに行かない（RFC 8446 §6.1 は返事を待つことを求めない）。
+    if (stopping) {
+        SSL_set_shutdown(s.native_handle(), SSL_RECEIVED_SHUTDOWN);
+    }
+    // 返事を待つので窓が要る。切れていれば即エラーで戻る。
     s.next_layer().expires_after(window);
     co_await s.async_shutdown(net::as_tuple);
     boost::system::error_code ignored;
@@ -124,9 +130,10 @@ template <typename Stream>
 class Connection : public std::enable_shared_from_this<Connection<Stream>> {
   public:
     Connection(Stream stream, Limits limits, Router &router, detail::Counters &counters,
-               std::atomic<bool> &shutting, std::function<void()> on_done)
+               std::atomic<bool> &shutting, detail::ConnectionSet &conns,
+               std::function<void()> on_done)
         : stream_(std::move(stream)), limits_(limits), router_(router), counters_(counters),
-          shutting_(shutting), on_done_(std::move(on_done)) {
+          shutting_(shutting), conns_(conns), on_done_(std::move(on_done)) {
         // accept 直後なら必ず取れる。リクエストごとに引くと切断済みで空になる。
         boost::system::error_code pec;
         auto ep = lowest(stream_).socket().remote_endpoint(pec);
@@ -256,14 +263,28 @@ class Connection : public std::enable_shared_from_this<Connection<Stream>> {
 
     net::awaitable<void> run() {
         auto self = this->shared_from_this();
+        // stop() は admin strand から来る。取り消しは自分の strand に載せ直す。
+        conn_id_ = conns_.add([weak = this->weak_from_this(), ex = stream_.get_executor()] {
+            net::post(ex, [weak] {
+                if (auto c = weak.lock()) {
+                    c->cancel_if_waiting();
+                }
+            });
+        });
         try {
-            // TLS ならここで握手。平文は素通り。失敗したら応答を書かずに閉じる。
-            if (co_await do_handshake(stream_, limits_.read_timeout)) {
-                co_await serve_requests();
+            // stop() が登録簿を回し終えた後に登録した接続は、ここで拾う。
+            if (!shutting_.load()) {
+                // TLS ならここで握手。平文は素通り。失敗したら応答を書かずに閉じる。
+                waiting_ = true;
+                const bool shaken = co_await do_handshake(stream_, limits_.read_timeout);
+                waiting_ = false;
+                if (shaken) {
+                    co_await serve_requests();
+                }
             }
         } catch (...) {
         }
-        co_await shutdown_stream(stream_, limits_.write_timeout);
+        co_await shutdown_stream(stream_, limits_.write_timeout, shutting_.load());
         finish();
         co_return;
     }
@@ -284,8 +305,11 @@ class Connection : public std::enable_shared_from_this<Connection<Stream>> {
                 parser.header_limit(static_cast<std::uint32_t>(
                     std::min<std::uint64_t>(limits_.max_header_bytes, 0xffffffffu)));
                 parser.body_limit(limits_.max_body_bytes);
+                // 要求はヘッダが揃うまで始まっていない。この間だけ stop() が取り消せる。
+                waiting_ = true;
                 auto [ec, bytes] =
                     co_await http::async_read_header(stream_, buffer_, parser, net::as_tuple);
+                waiting_ = false;
                 (void)bytes;
                 if (!ec && !parser.is_done()) {
                     // 100 を待つクライアントには先に返す。上限超過は async_read_header が
@@ -349,9 +373,19 @@ class Connection : public std::enable_shared_from_this<Connection<Stream>> {
         co_return;
     }
 
+    // 要求の到着を待っている間なら読みを取り消す。始まった要求は完了させる。
+    void cancel_if_waiting() {
+        if (waiting_) {
+            lowest(stream_).cancel();
+        }
+    }
+
     void finish() {
         if (finished_.exchange(true)) {
             return;
+        }
+        if (conn_id_) {
+            conns_.remove(*conn_id_);
         }
         if (on_done_) {
             auto cb = std::move(on_done_);
@@ -366,23 +400,29 @@ class Connection : public std::enable_shared_from_this<Connection<Stream>> {
     Router &router_;
     detail::Counters &counters_;
     std::atomic<bool> &shutting_;
+    detail::ConnectionSet &conns_;
+    std::optional<std::uint64_t> conn_id_;
+    // strand の上でだけ触る。
+    bool waiting_{false};
     std::function<void()> on_done_;
     std::atomic<bool> finished_{false};
 };
 
 net::awaitable<void> serve_connection(beast::tcp_stream stream, const Limits &limits,
                                       Router &router, detail::Counters &counters,
-                                      std::atomic<bool> &shutting, std::function<void()> on_done) {
+                                      std::atomic<bool> &shutting, detail::ConnectionSet &conns,
+                                      std::function<void()> on_done) {
     auto conn = std::make_shared<Connection<beast::tcp_stream>>(
-        std::move(stream), limits, router, counters, shutting, std::move(on_done));
+        std::move(stream), limits, router, counters, shutting, conns, std::move(on_done));
     co_await conn->run();
 }
 
 net::awaitable<void> serve_connection(detail::tls_stream stream, const Limits &limits,
                                       Router &router, detail::Counters &counters,
-                                      std::atomic<bool> &shutting, std::function<void()> on_done) {
+                                      std::atomic<bool> &shutting, detail::ConnectionSet &conns,
+                                      std::function<void()> on_done) {
     auto conn = std::make_shared<Connection<detail::tls_stream>>(
-        std::move(stream), limits, router, counters, shutting, std::move(on_done));
+        std::move(stream), limits, router, counters, shutting, conns, std::move(on_done));
     co_await conn->run();
 }
 

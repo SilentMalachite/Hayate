@@ -1,6 +1,7 @@
 #include "detail/ascii.hpp"
 #include "detail/base64.hpp"
 #include "detail/hmac.hpp"
+#include "detail/jwt_time.hpp"
 
 #include <hayate/jwt.hpp>
 #include <hayate/request.hpp>
@@ -8,7 +9,6 @@
 
 #include <chrono>
 #include <cstdint>
-#include <limits>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -45,34 +45,6 @@ std::string_view bearer(std::string_view value) {
         token.remove_prefix(1);
     }
     return token;
-}
-
-// exp / nbf は int64 秒の整数だけ受ける。小数・範囲外・非数値は不正なトークン扱い。
-std::optional<std::int64_t> numeric_date(const Json &v) {
-    if (v.is_number_unsigned()) {
-        const auto u = v.get<std::uint64_t>();
-        if (u > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())) {
-            return std::nullopt;
-        }
-        return static_cast<std::int64_t>(u);
-    }
-    if (v.is_number_integer()) {
-        return v.get<std::int64_t>();
-    }
-    return std::nullopt;
-}
-
-// leeway を足しても溢れない。
-constexpr std::int64_t sat_add(std::int64_t a, std::int64_t b) noexcept {
-    constexpr auto max = std::numeric_limits<std::int64_t>::max();
-    constexpr auto min = std::numeric_limits<std::int64_t>::min();
-    if (b > 0 && a > max - b) {
-        return max;
-    }
-    if (b < 0 && a < min - b) {
-        return min;
-    }
-    return a + b;
 }
 
 // key が文字列で want と等しいか。value() は型違いで投げ、500 に化けるので使わない。
@@ -157,23 +129,9 @@ Middleware jwt(Jwt cfg) {
         if (payload.is_discarded() || !payload.is_object()) {
             co_return unauthorized();
         }
-        const auto now = now_seconds();
-        const auto leeway = static_cast<std::int64_t>(cfg.leeway.count());
-        // exp 無しは永久トークンになる。RFC 上は任意だが締める。
-        const auto exp = payload.find("exp");
-        if (exp == payload.end()) {
+        if (!detail::times_ok(payload, now_seconds(),
+                              static_cast<std::int64_t>(cfg.leeway.count()))) {
             co_return unauthorized();
-        }
-        const auto exp_at = numeric_date(*exp);
-        if (!exp_at || now > sat_add(*exp_at, leeway)) {
-            co_return unauthorized();
-        }
-        const auto nbf = payload.find("nbf");
-        if (nbf != payload.end()) {
-            const auto nbf_at = numeric_date(*nbf);
-            if (!nbf_at || sat_add(now, leeway) < *nbf_at) {
-                co_return unauthorized();
-            }
         }
         if (!cfg.issuer.empty() && !string_claim_is(payload, "iss", cfg.issuer)) {
             co_return unauthorized();

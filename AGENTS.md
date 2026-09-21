@@ -30,9 +30,9 @@ Claude Code 用の `CLAUDE.md` より短いのは意図的。写しにしない�
 
 - C++20。namespace `hayate`。Asio + Beast。コルーチンハンドラ。マクロルート禁止。
 - `Result<T>` は 1 実装。`std::expected` 禁止。
-- JSON は 1 本（glaze 優先、なければ nlohmann）。
+- JSON は nlohmann/json 1 本（glaze は C++23 必須なので採らない）。混在禁止。
 - Request の view を Request より長く持たない。
-- 例外は境界を出ない。`new`/`delete` 禁止。神オブジェクト禁止。
+- 例外は境界を出ない。`new`/`delete`/`malloc`・生配列・共有可変グローバル禁止。C++23/26 必須機能と C++ Modules は使わない。神オブジェクト禁止。
 - Beast/Asio の失敗は、応答を書けるなら `Error` にして応答（413 / 431 / 500）。書けないなら閉じる。受け手のない `Error` は作らない。
 - Drogon / Crow / Oat++ / Cinatra / userver をコピーしない。
 - 図に無い型を足さない。
@@ -40,6 +40,7 @@ Claude Code 用の `CLAUDE.md` より短いのは意図的。写しにしない�
 ```bash
 cmake --preset debug
 cmake --build --preset test && ctest --preset test --output-on-failure
+cmake --preset tsan && cmake --build --preset tsan && ctest --preset tsan --output-on-failure
 ```
 
 ## 聞くもの

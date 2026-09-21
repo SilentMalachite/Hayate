@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <memory>
 #include <string>
 
 namespace http = boost::beast::http;
@@ -249,4 +250,81 @@ TEST(Tls, Tls11ClientIsRejected) {
     const auto ec = connect_and_handshake(ioc, s, srv.port());
     EXPECT_TRUE(ec);
     EXPECT_NE(ec, beast::error::timeout) << ec.message();
+}
+
+// ハンドシェイクを始めない接続も、stop() ですぐ閉じる。read_timeout まで待たない。
+TEST(Tls, StopClosesPendingHandshake) {
+    TempCert cert;
+    TestServer srv([&](hayate::App &app) {
+        app.tls({.cert_file = cert.cert().string(), .key_file = cert.key().string()});
+        app.limits().read_timeout = std::chrono::seconds(30);
+        app.get("/", [](hayate::Request &) { return hayate::Response::text("ok"); });
+    });
+    Conn c(srv.port());
+    ASSERT_FALSE(c.connect_error());
+    // backlog は来た順に accept される。後の要求が通れば、c も accept 済み。
+    ASSERT_EQ(https_call("127.0.0.1", srv.port(), http::verb::get, "/").status, 200);
+    srv.app().stop();
+    http::response<http::string_body> res;
+    const auto ec = c.read(res, std::chrono::seconds(5));
+    EXPECT_TRUE(ec);
+    EXPECT_NE(ec, boost::beast::error::timeout);
+}
+
+// 停止中は close_notify を送るだけで、相手の返事を待たない。待つと write_timeout まで
+// serve() が戻らない。
+TEST(Tls, StopClosesIdleKeepAlive) {
+    TempCert cert;
+    auto srv = std::make_unique<TestServer>([&](hayate::App &app) {
+        app.tls({.cert_file = cert.cert().string(), .key_file = cert.key().string()});
+        app.limits().idle_timeout = std::chrono::seconds(30);
+        app.limits().write_timeout = std::chrono::seconds(30);
+        app.get("/", [](hayate::Request &) { return hayate::Response::text("ok"); });
+    });
+    auto ctx = test_client_ctx();
+    TlsConn c(srv->port(), ctx, std::chrono::seconds(5));
+    ASSERT_FALSE(c.connect_error()) << c.connect_error().message();
+    http::request<http::string_body> req{http::verb::get, "/", 11};
+    req.set(http::field::host, "127.0.0.1");
+    req.keep_alive(true);
+    ASSERT_FALSE(c.write(req));
+    http::response<http::string_body> res;
+    ASSERT_FALSE(c.read(res));
+    srv->app().stop();
+    http::response<http::string_body> after;
+    // close_notify を受けたなら end_of_stream。無しで切られたら stream_truncated になる。
+    EXPECT_EQ(c.read(after, std::chrono::seconds(5)), http::error::end_of_stream);
+    // c は close_notify を返さないまま開いている。それでも serve() はすぐ戻る。
+    const auto t0 = std::chrono::steady_clock::now();
+    srv.reset();
+    EXPECT_LT(std::chrono::steady_clock::now() - t0, std::chrono::seconds(5));
+}
+
+TEST(Tls, EncryptedKeyWithPassword) {
+    TempCert cert(TempCert::Key::ec, "s3cret");
+    TestServer srv([&](hayate::App &app) {
+        app.tls({.cert_file = cert.cert().string(),
+                 .key_file = cert.key().string(),
+                 .key_password = "s3cret"});
+        app.get("/", [](hayate::Request &) { return hayate::Response::text("ok"); });
+    });
+    auto r = https_call("127.0.0.1", srv.port(), http::verb::get, "/");
+    EXPECT_EQ(r.status, 200) << r.error_message;
+    hayate::App wrong;
+    EXPECT_THROW(wrong.tls({.cert_file = cert.cert().string(),
+                            .key_file = cert.key().string(),
+                            .key_password = "nope"}),
+                 std::exception);
+}
+
+// peer は TLS の下の TCP の相手。
+TEST(Tls, PeerIsRemoteIp) {
+    TempCert cert;
+    TestServer srv([&](hayate::App &app) {
+        app.tls({.cert_file = cert.cert().string(), .key_file = cert.key().string()});
+        app.get("/", [](hayate::Request &req) { return hayate::Response::text(req.peer()); });
+    });
+    auto r = https_call("127.0.0.1", srv.port(), http::verb::get, "/");
+    EXPECT_EQ(r.status, 200) << r.error_message;
+    EXPECT_EQ(r.body, "127.0.0.1");
 }

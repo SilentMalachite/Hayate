@@ -1,4 +1,5 @@
 #include "detail/base64.hpp"
+#include "detail/jwt_time.hpp"
 #include "http_client.hpp"
 #include "jwt_token.hpp"
 #include "test_server.hpp"
@@ -517,4 +518,39 @@ TEST(Hmac, MissingMacNeverMatches) {
     EXPECT_FALSE(signature_matches(mac, ""));
     EXPECT_FALSE(signature_matches(std::nullopt, ""));
     EXPECT_FALSE(signature_matches(std::nullopt, *mac));
+}
+
+// 秒の境界は実時計では決定的に作れない。now を固定して確かめる。
+TEST(JwtTime, ExpBoundary) {
+    using hayate::detail::times_ok;
+    const std::int64_t now = 1'000'000;
+    EXPECT_TRUE(times_ok(Json::object({{"exp", now}}), now, 0)) << "exp == now";
+    EXPECT_FALSE(times_ok(Json::object({{"exp", now - 1}}), now, 0));
+    EXPECT_TRUE(times_ok(Json::object({{"exp", now - 60}}), now, 60)) << "now == exp + leeway";
+    EXPECT_FALSE(times_ok(Json::object({{"exp", now - 61}}), now, 60));
+    EXPECT_FALSE(times_ok(Json::object({{"sub", "a"}}), now, 60)) << "no exp";
+}
+
+TEST(JwtTime, NbfBoundary) {
+    using hayate::detail::times_ok;
+    const std::int64_t now = 1'000'000;
+    const std::int64_t exp = now + 300;
+    EXPECT_TRUE(times_ok(Json::object({{"exp", exp}, {"nbf", now}}), now, 0)) << "nbf == now";
+    EXPECT_FALSE(times_ok(Json::object({{"exp", exp}, {"nbf", now + 1}}), now, 0));
+    EXPECT_TRUE(times_ok(Json::object({{"exp", exp}, {"nbf", now + 60}}), now, 60))
+        << "nbf == now + leeway";
+    EXPECT_FALSE(times_ok(Json::object({{"exp", exp}, {"nbf", now + 61}}), now, 60));
+}
+
+// 認証スキームの名前は大小を区別しない（RFC 9110 §11.1）。
+TEST(Jwt, BearerSchemeIsCaseInsensitive) {
+    TestServer srv([](hayate::App &app) { protect(app, base_cfg()); });
+    const auto tok = make_token(hs256_header(),
+                                Json::object({{"sub", "alice"}, {"exp", now_s() + 300}}), kSecret);
+    for (const char *scheme : {"bearer ", "BEARER ", "bEaReR "}) {
+        auto r = http_call("127.0.0.1", srv.port(), http::verb::get, "/me", {}, {},
+                           std::chrono::seconds(2), {{"Authorization", scheme + tok}});
+        EXPECT_EQ(r.status, 200) << scheme;
+        EXPECT_EQ(r.body, "alice") << scheme;
+    }
 }

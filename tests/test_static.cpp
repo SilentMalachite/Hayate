@@ -1,4 +1,5 @@
 #include "conn_client.hpp"
+#include "detail/files.hpp"
 #include "detail/open_file.hpp"
 #include "http_client.hpp"
 #include "temp_dir.hpp"
@@ -21,6 +22,7 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <utility>
 
 namespace http = boost::beast::http;
 namespace fs = std::filesystem;
@@ -158,6 +160,42 @@ TEST(Static, IndexHtml) {
     EXPECT_NE(r.content_type.find("text/html"), std::string::npos);
 }
 
+TEST(Static, SubdirectoryIndex) {
+    TempDir root;
+    fs::create_directory(root.dir / "sub");
+    {
+        std::ofstream out(root.dir / "sub" / "index.html");
+        out << "sub";
+    }
+    TestServer srv(
+        [&](hayate::App &app) { app.get("/assets/*path", hayate::files(root.dir.string())); });
+    auto r = http_call("127.0.0.1", srv.port(), http::verb::get, "/assets/sub");
+    EXPECT_EQ(r.status, 200);
+    EXPECT_EQ(r.body, "sub");
+}
+
+// 拡張子の大小は見ない。
+TEST(Static, ContentTypes) {
+    TempDir root;
+    const std::pair<const char *, const char *> cases[] = {
+        {"a.css", "text/css"},          {"a.js", "application/javascript"},
+        {"a.json", "application/json"}, {"a.htm", "text/html"},
+        {"b.HTML", "text/html"},        {"a.bin", "application/octet-stream"},
+    };
+    for (const auto &[name, type] : cases) {
+        std::ofstream out(root.dir / name);
+        out << "x";
+    }
+    TestServer srv(
+        [&](hayate::App &app) { app.get("/assets/*path", hayate::files(root.dir.string())); });
+    for (const auto &[name, type] : cases) {
+        auto r =
+            http_call("127.0.0.1", srv.port(), http::verb::get, std::string("/assets/") + name);
+        EXPECT_EQ(r.status, 200) << name;
+        EXPECT_EQ(r.content_type.rfind(type, 0), 0u) << name << ": " << r.content_type;
+    }
+}
+
 TEST(Static, HtmlContentType) {
     TempDir root;
     {
@@ -169,6 +207,69 @@ TEST(Static, HtmlContentType) {
     auto r = http_call("127.0.0.1", srv.port(), http::verb::get, "/assets/page.html");
     EXPECT_EQ(r.status, 200);
     EXPECT_NE(r.content_type.find("text/html"), std::string::npos);
+}
+
+// 1 本だけのプールを先に塞ぎ、FS 待ちを期限切れにする。
+TEST(Static, FsTimeoutIs503) {
+    TempDir root;
+    {
+        std::ofstream out(root.dir / "a.txt");
+        out << "a";
+    }
+    std::promise<void> started;
+    std::promise<void> unblock;
+    std::weak_ptr<boost::asio::thread_pool> weak_pool;
+    TestServer srv([&](hayate::App &app) {
+        // プールは App だけが持つ。テストが持って App より長生きさせると、ワーカーの完了が
+        // 壊れた strand を触る。
+        auto pool = std::make_shared<boost::asio::thread_pool>(1);
+        weak_pool = pool;
+        boost::asio::post(*pool, [&started, blocked = unblock.get_future()] {
+            started.set_value();
+            blocked.wait();
+        });
+        app.get("/assets/*path", hayate::detail::files_on(fs::canonical(root.dir), 0,
+                                                          std::chrono::milliseconds(100), pool));
+    });
+    // 途中で ASSERT が落ちても塞いだ仕事は放す。放さないと App の破棄がプールの join で固まる。
+    struct Unblock {
+        std::promise<void> &p;
+        bool done{false};
+        void operator()() {
+            if (!done) {
+                done = true;
+                p.set_value();
+            }
+        }
+        ~Unblock() { (*this)(); }
+    } release{unblock};
+    started.get_future().wait();
+    auto r = http_call("127.0.0.1", srv.port(), http::verb::get, "/assets/a.txt");
+    EXPECT_EQ(r.status, 503);
+    // 期限切れで置いていった stat を、App が生きているうちに終わらせる。1 本のプールは順に走る。
+    release();
+    std::promise<void> drained;
+    if (auto pool = weak_pool.lock()) {
+        boost::asio::post(*pool, [&drained] { drained.set_value(); });
+    } else {
+        drained.set_value();
+    }
+    drained.get_future().wait();
+}
+
+// 0 本のプールでは何も走らず、すべて 503 になる。1 本に切り上げる。
+TEST(Static, ZeroIoThreadsStillServes) {
+    TempDir root;
+    {
+        std::ofstream out(root.dir / "a.txt");
+        out << "a";
+    }
+    TestServer srv([&](hayate::App &app) {
+        app.get("/assets/*path", hayate::files(root.dir.string(), 0, 0));
+    });
+    auto r = http_call("127.0.0.1", srv.port(), http::verb::get, "/assets/a.txt");
+    EXPECT_EQ(r.status, 200);
+    EXPECT_EQ(r.body, "a");
 }
 
 TEST(Static, OversizeFileIs404) {

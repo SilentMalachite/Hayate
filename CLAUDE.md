@@ -44,8 +44,8 @@ Phase を飛ばさない。今の受け入れは Phase 1 と Phase 2（CORS / �
 ## 制約
 
 - C++20 厳守。`std::expected`・C++ Modules・C++23/26 必須機能は使わない
-- `hayate::Result<T>` は薄い自前か Boost.Outcome の一方
-- JSON は 1 本（優先 glaze、ダメなら nlohmann）。混在禁止
+- `hayate::Result<T>` は `std::variant` の薄い自前 1 本。Boost.Outcome は使わない
+- JSON は nlohmann/json 1 本（glaze は C++23 必須なので採らない）。混在禁止
 - `new` / `delete` / `malloc`、生配列禁止
 - Request 配下は非所有 view。寿命は Request。view を App や Response に保存しない
 - 例外はハンドラ / MW 境界を出ない。Beast/Asio の失敗は、応答を書ける段階なら `Error` にして応答する（413 / 431 / 500）。書けない段階（timeout・相手の切断・handshake 失敗）なら閉じるだけで、受け取る側のない `Error` は作らない
@@ -57,12 +57,13 @@ Phase を飛ばさない。今の受け入れは Phase 1 と Phase 2（CORS / �
 - debug preset で ASan。新規リーク・UAF を残さない
 - clang-format を通す。コメントは「なぜ」だけ
 
-コマンド（揃えたらこの名前）:
+コマンド:
 
 ```bash
 cmake --preset debug
 cmake --build --preset debug
 cmake --build --preset test && ctest --preset test --output-on-failure
+cmake --preset tsan && cmake --build --preset tsan && ctest --preset tsan --output-on-failure
 ```
 
 ## 聞いてからやれ
