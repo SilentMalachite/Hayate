@@ -1,3 +1,4 @@
+#include "conn_client.hpp"
 #include "http_client.hpp"
 #include "test_server.hpp"
 
@@ -14,16 +15,6 @@ namespace http = boost::beast::http;
 namespace net = boost::asio;
 
 namespace {
-
-// keep-alive で同じ接続を使い回すための素の接続。
-struct Conn {
-    net::io_context ioc;
-    boost::beast::tcp_stream stream{ioc};
-    boost::beast::flat_buffer buf;
-    explicit Conn(std::uint16_t port) {
-        stream.connect(net::ip::tcp::endpoint(net::ip::make_address("127.0.0.1"), port));
-    }
-};
 
 http::request<http::string_body> make_req(http::verb v, std::string target, bool keep) {
     http::request<http::string_body> req{v, std::move(target), 11};
@@ -49,6 +40,7 @@ TEST(HttpClient, TimesOutOnSilentServer) {
     auto r =
         http_call("127.0.0.1", port, http::verb::get, "/", {}, {}, std::chrono::milliseconds(200));
     EXPECT_TRUE(r.error);
+    EXPECT_TRUE(r.timed_out);
     EXPECT_LT(std::chrono::steady_clock::now() - began, std::chrono::seconds(2));
 }
 
@@ -58,16 +50,16 @@ TEST(Http, HeadGetsNoBody) {
         app.get("/", [](hayate::Request &) { return hayate::Response::text("root"); });
     });
     Conn c(srv.port());
-    http::write(c.stream, make_req(http::verb::head, "/", true));
+    ASSERT_FALSE(c.connect_error());
+    ASSERT_FALSE(c.write(make_req(http::verb::head, "/", true)));
     http::response_parser<http::empty_body> head;
     head.skip(true);
-    http::read(c.stream, c.buf, head);
+    ASSERT_FALSE(c.read(head));
     EXPECT_EQ(head.get().result_int(), 405);
 
-    http::write(c.stream, make_req(http::verb::get, "/", false));
+    ASSERT_FALSE(c.write(make_req(http::verb::get, "/", false)));
     http::response<http::string_body> res;
-    boost::system::error_code ec;
-    http::read(c.stream, c.buf, res, ec);
+    const auto ec = c.read(res);
     ASSERT_FALSE(ec) << ec.message();
     EXPECT_EQ(res.result_int(), 200);
     EXPECT_EQ(res.body(), "root");
@@ -83,22 +75,22 @@ TEST(Http, ExpectContinueGets100) {
                  [](hayate::Request &req) { return hayate::Response::text(text_of(req)); });
     });
     Conn c(srv.port());
+    ASSERT_FALSE(c.connect_error());
     auto req = make_req(http::verb::post, "/echo", false);
     req.set(http::field::expect, "100-continue");
     req.body() = "hello";
     req.prepare_payload();
     http::request_serializer<http::string_body> sr{req};
-    http::write_header(c.stream, sr);
+    ASSERT_FALSE(c.write_header(sr));
 
     http::response<http::empty_body> interim;
-    boost::system::error_code ec;
-    http::read(c.stream, c.buf, interim, ec);
+    auto ec = c.read(interim);
     ASSERT_FALSE(ec) << ec.message();
     EXPECT_EQ(interim.result(), http::status::continue_);
 
-    http::write(c.stream, sr);
+    ASSERT_FALSE(c.write(sr));
     http::response<http::string_body> res;
-    http::read(c.stream, c.buf, res, ec);
+    ec = c.read(res);
     ASSERT_FALSE(ec) << ec.message();
     EXPECT_EQ(res.result_int(), 200);
     EXPECT_EQ(res.body(), "hello");
@@ -115,16 +107,16 @@ TEST(Http, ExpectContinueOverLimitIs413Without100) {
                  [](hayate::Request &req) { return hayate::Response::text(text_of(req)); });
     });
     Conn c(srv.port());
+    ASSERT_FALSE(c.connect_error());
     auto req = make_req(http::verb::post, "/echo", false);
     req.set(http::field::expect, "100-continue");
     req.body() = "hello";
     req.prepare_payload();
     http::request_serializer<http::string_body> sr{req};
-    http::write_header(c.stream, sr);
+    ASSERT_FALSE(c.write_header(sr));
 
     http::response<http::string_body> res;
-    boost::system::error_code ec;
-    http::read(c.stream, c.buf, res, ec);
+    const auto ec = c.read(res);
     ASSERT_FALSE(ec) << ec.message();
     EXPECT_EQ(res.result_int(), 413);
 }
@@ -139,19 +131,20 @@ TEST(Http, HandlerCloseIsHonored) {
         });
     });
     Conn c(srv.port());
-    http::write(c.stream, make_req(http::verb::get, "/", true));
+    ASSERT_FALSE(c.connect_error());
+    ASSERT_FALSE(c.write(make_req(http::verb::get, "/", true)));
     http::response<http::string_body> first;
-    http::read(c.stream, c.buf, first);
+    ASSERT_FALSE(c.read(first));
     EXPECT_EQ(first.result_int(), 200);
     EXPECT_FALSE(first.keep_alive());
 
-    boost::system::error_code ec;
-    http::write(c.stream, make_req(http::verb::get, "/", true), ec);
+    auto ec = c.write(make_req(http::verb::get, "/", true));
     http::response<http::string_body> second;
     if (!ec) {
-        http::read(c.stream, c.buf, second, ec);
+        ec = c.read(second);
     }
     EXPECT_TRUE(ec) << "サーバーは 1 本目の後に閉じているはず";
+    EXPECT_NE(ec, boost::beast::error::timeout);
 }
 
 // サーバーが閉じると決めたら、ハンドラの keep-alive は応答に出さない。
@@ -164,9 +157,10 @@ TEST(Http, ServerCloseOverridesHandlerKeepAlive) {
         });
     });
     Conn c(srv.port());
-    http::write(c.stream, make_req(http::verb::get, "/", false));
+    ASSERT_FALSE(c.connect_error());
+    ASSERT_FALSE(c.write(make_req(http::verb::get, "/", false)));
     http::response<http::string_body> res;
-    http::read(c.stream, c.buf, res);
+    ASSERT_FALSE(c.read(res));
     EXPECT_EQ(res.result_int(), 200);
     EXPECT_FALSE(res.keep_alive());
 }
@@ -177,9 +171,10 @@ TEST(Http, NoContentHasNoContentLength) {
         app.get("/", [](hayate::Request &) { return hayate::Response::no_content(); });
     });
     Conn c(srv.port());
-    http::write(c.stream, make_req(http::verb::get, "/", false));
+    ASSERT_FALSE(c.connect_error());
+    ASSERT_FALSE(c.write(make_req(http::verb::get, "/", false)));
     http::response<http::string_body> res;
-    http::read(c.stream, c.buf, res);
+    ASSERT_FALSE(c.read(res));
     EXPECT_EQ(res.result_int(), 204);
     EXPECT_EQ(res.count(http::field::content_length), 0u);
 }
@@ -194,11 +189,11 @@ TEST(Http, NoContentDropsHandlerBody) {
         });
     });
     Conn c(srv.port());
-    boost::system::error_code ec;
-    http::write(c.stream, make_req(http::verb::get, "/", false), ec);
+    ASSERT_FALSE(c.connect_error());
+    auto ec = c.write(make_req(http::verb::get, "/", false));
     http::response<http::string_body> res;
     if (!ec) {
-        http::read(c.stream, c.buf, res, ec);
+        ec = c.read(res);
     }
     ASSERT_FALSE(ec) << ec.message();
     EXPECT_EQ(res.result_int(), 204);
@@ -216,13 +211,89 @@ TEST(Http, OversizedHeaderIs500) {
         });
     });
     Conn c(srv.port());
-    boost::system::error_code ec;
-    http::write(c.stream, make_req(http::verb::get, "/", false), ec);
+    ASSERT_FALSE(c.connect_error());
+    auto ec = c.write(make_req(http::verb::get, "/", false));
     http::response<http::string_body> res;
     if (!ec) {
-        http::read(c.stream, c.buf, res, ec);
+        ec = c.read(res);
     }
     ASSERT_FALSE(ec) << ec.message();
     EXPECT_EQ(res.result_int(), 500);
     EXPECT_EQ(res.count("X-Big"), 0u);
+}
+
+// HTTP/1.0 の client は 1xx を知らない。100-continue の期待は無視する（RFC 9110 §10.1.1）。
+TEST(Http, ExpectContinueIgnoredOnHttp10) {
+    TestServer srv([](hayate::App &app) {
+        app.post("/echo",
+                 [](hayate::Request &req) { return hayate::Response::text(text_of(req)); });
+    });
+    Conn c(srv.port());
+    ASSERT_FALSE(c.connect_error());
+    http::request<http::string_body> req{http::verb::post, "/echo", 10};
+    req.set(http::field::host, "127.0.0.1");
+    req.set(http::field::expect, "100-continue");
+    req.body() = "hello";
+    req.prepare_payload();
+    ASSERT_FALSE(c.write(req));
+    http::response<http::string_body> res;
+    const auto ec = c.read(res);
+    ASSERT_FALSE(ec) << ec.message();
+    EXPECT_EQ(res.result_int(), 200);
+    EXPECT_EQ(res.body(), "hello");
+}
+
+// HEAD の Content-Length は、本文を送った場合の値。同じ 405 の本文と比べる。
+TEST(Http, HeadContentLengthMatchesBody) {
+    TestServer srv([](hayate::App &app) {
+        app.get("/", [](hayate::Request &) { return hayate::Response::text("root"); });
+    });
+    Conn c(srv.port());
+    ASSERT_FALSE(c.connect_error());
+    ASSERT_FALSE(c.write(make_req(http::verb::head, "/", true)));
+    http::response_parser<http::empty_body> head;
+    head.skip(true);
+    ASSERT_FALSE(c.read(head));
+    EXPECT_EQ(head.get().result_int(), 405);
+
+    ASSERT_FALSE(c.write(make_req(http::verb::post, "/", false)));
+    http::response<http::string_body> post;
+    ASSERT_FALSE(c.read(post));
+    EXPECT_EQ(post.result_int(), 405);
+    ASSERT_FALSE(post.body().empty());
+    EXPECT_EQ(head.get()[http::field::content_length], std::to_string(post.body().size()));
+}
+
+// 100 の後も keep-alive は続く。同じ接続の 2 本目が通る。
+TEST(Http, ExpectContinueKeepsAlive) {
+    TestServer srv([](hayate::App &app) {
+        app.post("/echo",
+                 [](hayate::Request &req) { return hayate::Response::text(text_of(req)); });
+    });
+    Conn c(srv.port());
+    ASSERT_FALSE(c.connect_error());
+    auto req = make_req(http::verb::post, "/echo", true);
+    req.set(http::field::expect, "100-continue");
+    req.body() = "hello";
+    req.prepare_payload();
+    http::request_serializer<http::string_body> sr{req};
+    ASSERT_FALSE(c.write_header(sr));
+    http::response<http::empty_body> interim;
+    ASSERT_FALSE(c.read(interim));
+    EXPECT_EQ(interim.result(), http::status::continue_);
+    ASSERT_FALSE(c.write(sr));
+    http::response<http::string_body> first;
+    ASSERT_FALSE(c.read(first));
+    EXPECT_EQ(first.body(), "hello");
+    EXPECT_TRUE(first.keep_alive());
+
+    auto again = make_req(http::verb::post, "/echo", false);
+    again.body() = "again";
+    again.prepare_payload();
+    ASSERT_FALSE(c.write(again));
+    http::response<http::string_body> second;
+    const auto ec = c.read(second);
+    ASSERT_FALSE(ec) << ec.message();
+    EXPECT_EQ(second.result_int(), 200);
+    EXPECT_EQ(second.body(), "again");
 }

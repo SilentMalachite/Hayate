@@ -1,3 +1,4 @@
+#include "conn_client.hpp"
 #include "http_client.hpp"
 #include "test_server.hpp"
 
@@ -11,6 +12,17 @@
 #include <utility>
 
 namespace http = boost::beast::http;
+
+namespace {
+
+http::request<http::string_body> get_req(std::string target, bool keep) {
+    http::request<http::string_body> req{http::verb::get, std::move(target), 11};
+    req.set(http::field::host, "127.0.0.1");
+    req.keep_alive(keep);
+    return req;
+}
+
+} // namespace
 
 TEST(Mw, OnionOrder) {
     std::string trace;
@@ -150,4 +162,96 @@ TEST(Mw, CopyThrowIs500) {
     auto r = http_call("127.0.0.1", srv.port(), http::verb::get, "/");
     EXPECT_FALSE(r.error);
     EXPECT_EQ(r.status, 500);
+}
+
+// group の MW はマッチしたルートにだけ付く。隣の group とトップレベルへは漏れない。
+TEST(Mw, GroupMwSkipsSiblingGroup) {
+    std::string trace;
+    TestServer srv([&](hayate::App &app) {
+        auto mark = [&trace](std::string tag) {
+            return [&trace, tag](hayate::Request &req,
+                                 hayate::Next next) -> asio::awaitable<hayate::Response> {
+                trace += tag;
+                co_return co_await next(req);
+            };
+        };
+        auto ok = [](hayate::Request &) { return hayate::Response::text("ok"); };
+        app.group("/a", [&](hayate::Router &r) {
+            r.use(mark("A"));
+            r.get("/x", ok);
+        });
+        app.group("/b", [&](hayate::Router &r) {
+            r.use(mark("B"));
+            r.get("/x", ok);
+        });
+        app.get("/top", ok);
+    });
+    EXPECT_EQ(http_call("127.0.0.1", srv.port(), http::verb::get, "/b/x").status, 200);
+    EXPECT_EQ(trace, "B");
+    trace.clear();
+    EXPECT_EQ(http_call("127.0.0.1", srv.port(), http::verb::get, "/top").status, 200);
+    EXPECT_EQ(trace, "");
+    EXPECT_EQ(http_call("127.0.0.1", srv.port(), http::verb::get, "/a/x").status, 200);
+    EXPECT_EQ(trace, "A");
+}
+
+// 例外を 500 にした後も接続は閉じない。同じ接続の次の要求が通る。
+TEST(Mw, KeepAliveAfter500) {
+    TestServer srv([](hayate::App &app) {
+        app.get("/boom",
+                [](hayate::Request &) -> hayate::Response { throw std::runtime_error("boom"); });
+        app.get("/ok", [](hayate::Request &) { return hayate::Response::text("ok"); });
+    });
+    Conn c(srv.port());
+    ASSERT_FALSE(c.connect_error());
+    ASSERT_FALSE(c.write(get_req("/boom", true)));
+    http::response<http::string_body> first;
+    ASSERT_FALSE(c.read(first));
+    EXPECT_EQ(first.result_int(), 500);
+    EXPECT_TRUE(first.keep_alive());
+
+    ASSERT_FALSE(c.write(get_req("/ok", false)));
+    http::response<http::string_body> second;
+    const auto ec = c.read(second);
+    ASSERT_FALSE(ec) << ec.message();
+    EXPECT_EQ(second.result_int(), 200);
+    EXPECT_EQ(second.body(), "ok");
+}
+
+// 同じ T の set は上書き。
+TEST(Request, ExtensionOverwrite) {
+    hayate::Request req;
+    req.set<std::string>("first");
+    req.set<std::string>("second");
+    ASSERT_NE(req.get<std::string>(), nullptr);
+    EXPECT_EQ(*req.get<std::string>(), "second");
+}
+
+// Extension の寿命は Request。keep-alive の次の要求には残らない。
+TEST(Mw, ExtensionDoesNotLeakAcrossRequests) {
+    TestServer srv([](hayate::App &app) {
+        app.use([](hayate::Request &req, hayate::Next next) -> asio::awaitable<hayate::Response> {
+            if (const auto v = req.header("X-Set"); !v.empty()) {
+                req.set<std::string>(std::string(v));
+            }
+            co_return co_await next(req);
+        });
+        app.get("/", [](hayate::Request &req) {
+            auto *v = req.get<std::string>();
+            return hayate::Response::text(v ? *v : "none");
+        });
+    });
+    Conn c(srv.port());
+    ASSERT_FALSE(c.connect_error());
+    auto first_req = get_req("/", true);
+    first_req.set("X-Set", "one");
+    ASSERT_FALSE(c.write(first_req));
+    http::response<http::string_body> first;
+    ASSERT_FALSE(c.read(first));
+    EXPECT_EQ(first.body(), "one");
+
+    ASSERT_FALSE(c.write(get_req("/", false)));
+    http::response<http::string_body> second;
+    ASSERT_FALSE(c.read(second));
+    EXPECT_EQ(second.body(), "none");
 }

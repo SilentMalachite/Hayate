@@ -218,3 +218,49 @@ TEST(Router, InvalidHeaderNameIsIgnored) {
     EXPECT_EQ(r.status, 200) << r.error_message;
     EXPECT_EQ(r.extra["Bad Name"], "");
 }
+
+// 全セグメント同点なら先に登録した方。
+TEST(Router, EqualScoreFirstRegisteredWins) {
+    TestServer srv([](hayate::App &app) {
+        app.get("/u/:id", [](hayate::Request &) { return hayate::Response::text("id"); });
+        app.get("/u/:name", [](hayate::Request &) { return hayate::Response::text("name"); });
+    });
+    auto r = http_call("127.0.0.1", srv.port(), http::verb::get, "/u/7");
+    EXPECT_EQ(r.status, 200);
+    EXPECT_EQ(r.body, "id");
+}
+
+// セグメントごとに param > wildcard。登録順で覆らない。
+TEST(Router, ParamBeatsWildcard) {
+    for (const bool wildcard_first : {false, true}) {
+        TestServer srv([&](hayate::App &app) {
+            auto param = [](hayate::Request &) { return hayate::Response::text("param"); };
+            auto wild = [](hayate::Request &) { return hayate::Response::text("wild"); };
+            if (wildcard_first) {
+                app.get("/a/*rest", wild);
+                app.get("/a/:x", param);
+            } else {
+                app.get("/a/:x", param);
+                app.get("/a/*rest", wild);
+            }
+        });
+        auto r = http_call("127.0.0.1", srv.port(), http::verb::get, "/a/b");
+        EXPECT_EQ(r.body, "param") << "wildcard_first=" << wildcard_first;
+    }
+}
+
+// 末尾の `/` は消さないので、`/a` と `/a/` は別ルート。group の "/" も `/api/` になる。
+TEST(Router, TrailingSlashIsDistinct) {
+    TestServer srv([](hayate::App &app) {
+        app.get("/a", [](hayate::Request &) { return hayate::Response::text("a"); });
+        app.group("/api", [](hayate::Router &r) {
+            r.get("/", [](hayate::Request &) { return hayate::Response::text("api"); });
+        });
+    });
+    EXPECT_EQ(http_call("127.0.0.1", srv.port(), http::verb::get, "/a").status, 200);
+    EXPECT_EQ(http_call("127.0.0.1", srv.port(), http::verb::get, "/a/").status, 404);
+    auto api = http_call("127.0.0.1", srv.port(), http::verb::get, "/api/");
+    EXPECT_EQ(api.status, 200);
+    EXPECT_EQ(api.body, "api");
+    EXPECT_EQ(http_call("127.0.0.1", srv.port(), http::verb::get, "/api").status, 404);
+}

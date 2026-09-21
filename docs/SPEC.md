@@ -239,7 +239,8 @@ HTTP/1.1 の約束:
 - HEAD はルーティングしない（GET 扱いにしない。404 / 405 のまま）。ただし HEAD への応答は
   ステータスによらず本文を送らない。`Content-Length` は本文を送った場合の値を付ける
 - `Expect: 100-continue` の要求には、本文を読む前に `100 Continue` を返す。
-  `Content-Length` が `max_body_bytes` を超えるなら 100 を出さずに 413
+  `Content-Length` が `max_body_bytes` を超えるなら 100 を出さずに 413。
+  HTTP/1.0 の要求の 100-continue は無視する（1xx を知らない。RFC 9110 §10.1.1）
 - 接続を続けるかは「サーバーの判断」かつ「応答の `Connection`」。ハンドラが `Connection: close` を
   付ければ閉じる。サーバーが閉じると決めたら（要求が close、停止中など）、ハンドラの keep-alive は
   無視して `Connection: close` を送る。送ったヘッダと実際の挙動を食い違わせない
@@ -282,10 +283,10 @@ app.tls({.cert_file = "server.pem", .key_file = "server.key"})
 - 新しい公開型は設定値 struct `Tls` 1 つだけ。`TlsContext` のようなクラスは作らない
 - `ssl::context` は App が内部で組む。公開ヘッダに `asio::ssl` は出さない
 - `tls()` を呼んだ App は全接続が TLS。平文との同時待ち受けはしない
-- 証明書 / 鍵が読めなければ `tls()` が投げる（`bind()` と同じく設定時に落とす）
+- 証明書 / 鍵が読めない、または鍵が証明書と対でなければ `tls()` が投げる（`bind()` と同じく設定時に落とす）
 - `key_password` が空なら鍵にパスフレーズ無しとして扱う
 - ハンドシェイクの窓は `read_timeout`。失敗した接続は応答を書かずに閉じる
-- 終了は TLS shutdown → socket shutdown の順
+- 終了は TLS shutdown → socket shutdown の順。相手の close_notify を待つのは `write_timeout` まで
 - sslv2 / sslv3 / tlsv1 / tlsv1.1 を無効化する。最低 TLS 1.2
 - `Request::peer()` は TLS でも accept 時の remote IP
 

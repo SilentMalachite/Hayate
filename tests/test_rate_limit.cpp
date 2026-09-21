@@ -81,3 +81,69 @@ TEST(RateLimit, RejectedHitsDoNotWrap) {
     EXPECT_FALSE(hayate::mw::detail::admit(w, 1));
     EXPECT_EQ(w.count, std::numeric_limits<std::uint32_t>::max());
 }
+
+// キーは接続の peer。X-Forwarded-For は client が好きに書けるので見ない。
+TEST(RateLimit, ForwardedForIsIgnored) {
+    TestServer srv([](hayate::App &app) {
+        app.use(hayate::mw::rate_limit({.max = 1, .window = std::chrono::seconds(60)}));
+        app.get("/", [](hayate::Request &) { return hayate::Response::text("ok"); });
+    });
+    auto a = http_call("127.0.0.1", srv.port(), http::verb::get, "/", {}, {},
+                       std::chrono::seconds(2), {{"X-Forwarded-For", "203.0.113.1"}});
+    auto b = http_call("127.0.0.1", srv.port(), http::verb::get, "/", {}, {},
+                       std::chrono::seconds(2), {{"X-Forwarded-For", "203.0.113.2"}});
+    EXPECT_EQ(a.status, 200) << a.error_message;
+    EXPECT_EQ(b.status, 429) << b.error_message;
+}
+
+namespace {
+
+using hayate::mw::detail::hit;
+using hayate::mw::detail::RateTable;
+using std::chrono::milliseconds;
+
+// 時計を進めずに窓の境界を踏むため、時刻は作り物にする。
+const auto t0 = std::chrono::steady_clock::time_point{} + std::chrono::hours(1);
+
+} // namespace
+
+// 窓が過ぎたら数え直す。
+TEST(RateLimit, WindowRollsOver) {
+    RateTable t;
+    const hayate::mw::RateLimit cfg{.max = 1, .window = milliseconds(1000)};
+    EXPECT_FALSE(hit(t, "p", t0, cfg).has_value());
+    EXPECT_TRUE(hit(t, "p", t0 + milliseconds(999), cfg).has_value());
+    EXPECT_FALSE(hit(t, "p", t0 + milliseconds(1000), cfg).has_value());
+    EXPECT_TRUE(hit(t, "p", t0 + milliseconds(1001), cfg).has_value());
+}
+
+// 窓の切れた peer は次の要求で消える。窓の中の peer は残る。
+TEST(RateLimit, SweepDropsExpiredPeers) {
+    RateTable t;
+    const hayate::mw::RateLimit cfg{.max = 10, .window = milliseconds(1000)};
+    hit(t, "a", t0, cfg);
+    hit(t, "b", t0 + milliseconds(500), cfg);
+    ASSERT_EQ(t.by_peer.size(), 2u);
+    hit(t, "c", t0 + milliseconds(1200), cfg);
+    EXPECT_EQ(t.by_peer.count("a"), 0u);
+    EXPECT_EQ(t.by_peer.count("b"), 1u);
+    EXPECT_EQ(t.by_peer.count("c"), 1u);
+}
+
+// Retry-After は窓の残りを秒に切り上げる。最小 1。
+TEST(RateLimit, RetryAfterRoundsUp) {
+    struct Case {
+        milliseconds left;
+        std::uint32_t want;
+    };
+    for (const auto &c :
+         {Case{milliseconds(300), 1}, Case{milliseconds(999), 1}, Case{milliseconds(1000), 1},
+          Case{milliseconds(1001), 2}, Case{milliseconds(60000), 60}}) {
+        RateTable t;
+        const hayate::mw::RateLimit cfg{.max = 1, .window = milliseconds(60000)};
+        ASSERT_FALSE(hit(t, "p", t0, cfg).has_value());
+        const auto got = hit(t, "p", t0 + (cfg.window - c.left), cfg);
+        ASSERT_TRUE(got.has_value()) << c.left.count();
+        EXPECT_EQ(*got, c.want) << c.left.count();
+    }
+}

@@ -1,3 +1,4 @@
+#include "detail/base64.hpp"
 #include "http_client.hpp"
 #include "jwt_token.hpp"
 #include "test_server.hpp"
@@ -9,8 +10,10 @@
 #include <chrono>
 #include <cstdint>
 #include <limits>
+#include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace http = boost::beast::http;
 using hayate::Json;
@@ -299,4 +302,195 @@ TEST(Jwt, ScopedToGroup) {
     EXPECT_EQ(open.body, "up");
     auto guarded = http_call("127.0.0.1", srv.port(), http::verb::get, "/api/me");
     EXPECT_EQ(guarded.status, 401);
+}
+
+// 範囲外の exp も nbf と同じく 401。
+TEST(Jwt, ExpBeyondInt64Is401) {
+    TestServer srv([](hayate::App &app) { protect(app, base_cfg()); });
+    const auto tok = make_token(
+        hs256_header(),
+        Json::object({{"sub", "alice"}, {"exp", std::numeric_limits<std::uint64_t>::max()}}),
+        kSecret);
+    EXPECT_EQ(call(srv.port(), tok).status, 401);
+}
+
+// 負の exp は遠い過去。飽和加算の下限でも通さない。
+TEST(Jwt, NegativeExpIs401) {
+    TestServer srv([](hayate::App &app) { protect(app, base_cfg()); });
+    for (const std::int64_t exp : {std::int64_t{-1}, std::numeric_limits<std::int64_t>::min()}) {
+        const auto tok =
+            make_token(hs256_header(), Json::object({{"sub", "alice"}, {"exp", exp}}), kSecret);
+        EXPECT_EQ(call(srv.port(), tok).status, 401) << exp;
+    }
+}
+
+// 負の nbf は遠い過去なので通る。
+TEST(Jwt, NegativeNbfPasses) {
+    TestServer srv([](hayate::App &app) { protect(app, base_cfg()); });
+    for (const std::int64_t nbf : {std::int64_t{-1}, std::numeric_limits<std::int64_t>::min()}) {
+        const auto tok = make_token(
+            hs256_header(), Json::object({{"sub", "alice"}, {"exp", now_s() + 300}, {"nbf", nbf}}),
+            kSecret);
+        EXPECT_EQ(call(srv.port(), tok).status, 200) << nbf;
+    }
+}
+
+TEST(Jwt, NonNumericExpIs401) {
+    TestServer srv([](hayate::App &app) { protect(app, base_cfg()); });
+    for (const auto &exp : {Json(std::to_string(now_s() + 300)), Json(true), Json(nullptr)}) {
+        const auto tok =
+            make_token(hs256_header(), Json::object({{"sub", "alice"}, {"exp", exp}}), kSecret);
+        EXPECT_EQ(call(srv.port(), tok).status, 401) << exp.dump();
+    }
+}
+
+// nbf の型と範囲は exp と同じ。小数は受けない。
+TEST(Jwt, FractionalNbfIs401) {
+    TestServer srv([](hayate::App &app) { protect(app, base_cfg()); });
+    const auto tok = make_token(hs256_header(),
+                                Json::object({{"sub", "alice"},
+                                              {"exp", now_s() + 300},
+                                              {"nbf", static_cast<double>(now_s() - 10) + 0.5}}),
+                                kSecret);
+    EXPECT_EQ(call(srv.port(), tok).status, 401);
+}
+
+// now + leeway >= nbf なら通る。署名時の now より検査時の now が小さくなることはない。
+TEST(Jwt, NbfWithinLeewayPasses) {
+    TestServer srv([](hayate::App &app) {
+        auto cfg = base_cfg();
+        cfg.leeway = std::chrono::seconds(60);
+        protect(app, cfg);
+    });
+    const auto tok = make_token(
+        hs256_header(),
+        Json::object({{"sub", "alice"}, {"exp", now_s() + 300}, {"nbf", now_s() + 30}}), kSecret);
+    EXPECT_EQ(call(srv.port(), tok).status, 200);
+}
+
+// leeway が最大でも now + leeway は溢れない。
+TEST(Jwt, MaxLeewayDoesNotOverflow) {
+    TestServer srv([](hayate::App &app) {
+        auto cfg = base_cfg();
+        cfg.leeway = std::chrono::seconds::max();
+        protect(app, cfg);
+    });
+    const auto tok = make_token(hs256_header(),
+                                Json::object({{"sub", "alice"},
+                                              {"exp", now_s() + 300},
+                                              {"nbf", std::numeric_limits<std::int64_t>::max()}}),
+                                kSecret);
+    EXPECT_EQ(call(srv.port(), tok).status, 200);
+}
+
+// base64url はパディング無しの URL 用アルファベットだけ。改変後の文字列に署名し直すので、
+// 緩い decoder なら 200 になる。
+TEST(Jwt, NonCanonicalBase64urlIs401) {
+    TestServer srv([](hayate::App &app) { protect(app, base_cfg()); });
+    const auto h64 = base64url_encode(hs256_header().dump());
+    // 6 文字続けると、3 バイト境界に揃った "???" と "~~~" が必ず入り、`_` と `-` になる。
+    const auto p64 = base64url_encode(
+        Json::object({{"sub", "alice"}, {"exp", now_s() + 300}, {"x", "??????~~~~~~"}}).dump());
+    ASSERT_NE(p64.find('-'), std::string::npos);
+    ASSERT_NE(p64.find('_'), std::string::npos);
+    ASSERT_EQ(call(srv.port(), sign_parts(h64, p64, kSecret)).status, 200);
+
+    auto standard = p64;
+    for (auto &c : standard) {
+        c = c == '-' ? '+' : c == '_' ? '/' : c;
+    }
+    auto len_mod4_is_1 = h64;
+    while (len_mod4_is_1.size() % 4 != 1) {
+        len_mod4_is_1 += 'A';
+    }
+    struct Case {
+        const char *what;
+        std::string header;
+        std::string payload;
+    };
+    for (const auto &c :
+         {Case{"header padding", h64 + "=", p64}, Case{"payload padding", h64, p64 + "="},
+          Case{"standard alphabet", h64, standard}, Case{"length mod 4 == 1", len_mod4_is_1, p64},
+          Case{"outside alphabet", h64, p64 + "*"}}) {
+        EXPECT_EQ(call(srv.port(), sign_parts(c.header, c.payload, kSecret)).status, 401) << c.what;
+    }
+    const auto good = sign_parts(h64, p64, kSecret);
+    EXPECT_EQ(call(srv.port(), good + "=").status, 401) << "signature padding";
+    EXPECT_EQ(call(srv.port(), good + "*").status, 401) << "signature outside alphabet";
+}
+
+TEST(Base64url, DecodesUrlAlphabetOnly) {
+    using hayate::detail::base64url_decode;
+    EXPECT_EQ(base64url_decode(""), std::string());
+    EXPECT_EQ(base64url_decode("YQ"), "a");
+    EXPECT_EQ(base64url_decode("YWI"), "ab");
+    EXPECT_EQ(base64url_decode("YWJj"), "abc");
+    EXPECT_EQ(base64url_decode("-_8"), "\xfb\xff");
+    for (const auto *bad : {"YQ==", "YWI=", "Y", "YWJjZ", "+_8", "-/8", "YW j", "YW.j"}) {
+        EXPECT_FALSE(base64url_decode(bad).has_value()) << bad;
+    }
+}
+
+// 形の崩れた header / payload は、署名が正しくても 401。
+TEST(Jwt, MalformedJoseIs401) {
+    TestServer srv([](hayate::App &app) { protect(app, base_cfg()); });
+    const auto claims = Json::object({{"sub", "alice"}, {"exp", now_s() + 300}});
+    struct Case {
+        const char *what;
+        Json header;
+        Json payload;
+    };
+    for (const auto &c : {Case{"no alg", Json::object({{"typ", "JWT"}}), claims},
+                          Case{"header array", Json::array({"HS256"}), claims},
+                          Case{"lowercase alg", Json::object({{"alg", "hs256"}}), claims},
+                          Case{"payload array", hs256_header(), Json::array({claims})}}) {
+        EXPECT_EQ(call(srv.port(), make_token(c.header, c.payload, kSecret)).status, 401) << c.what;
+    }
+}
+
+// 製品と同じ HMAC で作ったトークンしか無いと、署名対象や符号化を両方同じに間違えても通る。
+// RFC 7515 付録 A.1 のトークンを、外で作られたものとしてそのまま検証する。
+TEST(Jwt, Rfc7515A1Token) {
+    const auto key = hayate::detail::base64url_decode(
+        "AyM1SysPpbyDfgZld3umj1qzKObwVMkoqQ-EstJQLr_T-1qS0gZH75aKtMN3Yj0iPS4hcgUuTwjAzZr1Z9CAow");
+    ASSERT_TRUE(key.has_value());
+    const std::string token =
+        "eyJ0eXAiOiJKV1QiLA0KICJhbGciOiJIUzI1NiJ9"
+        ".eyJpc3MiOiJqb2UiLA0KICJleHAiOjEzMDA4MTkzODAsDQogImh0dHA6Ly9leGFtcGxlLmNvbS9pc19yb290Ijp0"
+        "cnVlfQ"
+        ".dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
+    auto serve = [&](std::chrono::seconds leeway) {
+        return TestServer([&](hayate::App &app) {
+            app.use(hayate::mw::jwt({.secret = *key, .issuer = "joe", .leeway = leeway}));
+            app.get("/me", [](hayate::Request &req) {
+                auto *c = req.get<hayate::Claims>();
+                return hayate::Response::text(c == nullptr ? "" : c->json.value("iss", ""));
+            });
+        });
+    };
+    // exp は 2011 年。既定では期限切れ。
+    {
+        auto srv = serve(std::chrono::seconds(0));
+        EXPECT_EQ(call(srv.port(), token).status, 401);
+    }
+    {
+        auto srv = serve(std::chrono::seconds::max());
+        auto r = call(srv.port(), token);
+        EXPECT_EQ(r.status, 200);
+        EXPECT_EQ(r.body, "joe");
+    }
+}
+
+// HMAC が失敗したら、どんな署名とも一致しない。空署名とも。
+TEST(Hmac, MissingMacNeverMatches) {
+    using hayate::detail::signature_matches;
+    const auto mac = hayate::detail::hmac_sha256("key", "data");
+    ASSERT_TRUE(mac.has_value());
+    EXPECT_TRUE(signature_matches(mac, *mac));
+    auto flipped = *mac;
+    flipped[0] = static_cast<char>(flipped[0] ^ 0x01);
+    EXPECT_FALSE(signature_matches(mac, flipped));
+    EXPECT_FALSE(signature_matches(mac, ""));
+    EXPECT_FALSE(signature_matches(std::nullopt, ""));
+    EXPECT_FALSE(signature_matches(std::nullopt, *mac));
 }
