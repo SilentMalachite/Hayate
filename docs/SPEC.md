@@ -1,11 +1,13 @@
 # SPEC
 
-## 目的
+English (canonical) | [日本語](SPEC.ja.md)
 
-C++20 の Web サービス用フレームワーク兼 HTTP サーバー **Hayate**（namespace `hayate`）を作る。
-小さく、速く、型が立つ。ハンドラはコルーチン。公開 API は Fluent + concepts。マクロでルートを登録しない。
+## Purpose
 
-利用者が書く形（Phase 1）:
+Build **Hayate** (namespace `hayate`), a framework and HTTP server for C++20 web services.
+Small, fast, strongly typed. Handlers are coroutines. The public API is fluent and uses concepts. Routes are never registered with macros.
+
+What users write (Phase 1):
 
 ```cpp
 #include <hayate/hayate.hpp>
@@ -30,145 +32,147 @@ int main() {
 }
 ```
 
-`include/hayate/hayate.hpp` が `namespace asio = boost::asio;` を導入する。
+`include/hayate/hayate.hpp` introduces `namespace asio = boost::asio;`.
 
-段階:
+Phases:
 
-- Phase 0: CMake Presets、公開ヘッダの骨格、固定応答の Hello
-- Phase 1: HTTP/1.1、ルーティング、JSON、MW、制限、graceful shutdown
-- Phase 2: CORS / 静的ファイル / multipart / WS / SSE / gzip / レート制限
-- Phase 3: TLS / JWT 検証 / OpenAPI 生成 / 最小 metrics / 静的ファイルのストリーミング送出
+- Phase 0: CMake Presets, skeleton public headers, Hello with a fixed response
+- Phase 1: HTTP/1.1, routing, JSON, middleware, limits, graceful shutdown
+- Phase 2: CORS / static files / multipart / WS / SSE / gzip / rate limiting
+- Phase 3: TLS / JWT verification / OpenAPI generation / minimal metrics / streaming of static files
 
-今の受け入れは Phase 1 と Phase 2（CORS / 静的ファイル / レート制限）と Phase 3（TLS / JWT 検証 / OpenAPI 生成 / 最小 metrics / 静的ファイルのストリーミング送出）。multipart / WS / SSE / gzip は実装しない。
+Currently accepted: Phase 1, Phase 2 (CORS / static files / rate limiting) and Phase 3 (TLS / JWT verification / OpenAPI generation / minimal metrics / streaming of static files). Multipart / WS / SSE / gzip are not implemented.
 
-## やらないこと
+## Non-goals
 
-- 既存 C++ Web フレームワーク（Drogon / Crow / Oat++ / Cinatra / userver）のコード・内部構造・マクロのコピー
-- 自前イベントループ、自前 HTTP パーサ、自前 TLS、自前 JSON
+- Copying code, internal structure or macros from existing C++ web frameworks (Drogon / Crow / Oat++ / Cinatra / userver)
+- An event loop, HTTP parser, TLS or JSON of our own
 - HTTP/2, HTTP/3, gRPC, GraphQL
-- HTML テンプレート、ORM、マイグレーション
-- C++23/26 必須機能、C++ Modules、反射マクロ DSL
-- 設定ファイルの巨大階層、プラグインローダ、ホットリロード
-- Windows 専用コード（初期）
-- 頼んでいないサンプル・抽象・「将来のため」の層
-- チャットだけに残る決定（正本は `docs/SPEC.md`）
+- HTML templates, ORM, migrations
+- Features that require C++23/26, C++ Modules, reflection macro DSLs
+- Huge configuration file hierarchies, plugin loaders, hot reload
+- Windows-only code (for now)
+- Samples, abstractions or "for the future" layers nobody asked for
+- Decisions that live only in chat (the canonical source is `docs/SPEC.md`)
 
-## 受け入れ基準
+## Acceptance criteria
 
 Phase 0
 
-- `cmake --preset debug` でビルドできる
-- Hello がポートを開き固定応答を返す
-- 公開ヘッダの置き場が `include/hayate/` になっている
+- `cmake --preset debug` builds
+- Hello opens a port and returns a fixed response
+- Public headers live in `include/hayate/`
 
 Phase 1
 
-- `cmake --build --preset test && ctest --preset test` が失敗ゼロ
-- `examples/hello` の `GET /` が 200
-- `:param` と JSON POST がテストで示されている
-- MW が onion（入り A→B、戻り B→A、`next` なし短絡）でテストされている
-- メソッド違いは 405（Allow 付き）、パス無しは 404
-- 過大 body / timeout / shutdown（in-flight 完了・新規拒否）がテストされている
-- HTTP/2 / ORM / テンプレートがリポジトリに無い（TLS は Phase 3 で受け入れた）
-- hello が公開ヘッダだけに依存する
-- debug + ASan で新規リーク・UAF が無い。macOS の Apple Clang の ASan には LeakSanitizer が無い
-  （`detect_leaks is not supported on this platform`）ので、debug preset で見えるのは UAF だけ。
-  リークは Homebrew LLVM の clang で ASan を付けてビルドし、`ASAN_OPTIONS=detect_leaks=1` で全テストを
-  回して見る（2026-09-21、LLVM 23、234 件でリーク 0）
-- 頼んでいないファイルが diff に無い
+- `cmake --build --preset test && ctest --preset test` has zero failures
+- `GET /` on `examples/hello` returns 200
+- `:param` and JSON POST are shown by tests
+- Middleware is tested as an onion (in A→B, out B→A, short-circuit without `next`)
+- A wrong method is 405 (with Allow), no matching path is 404
+- Oversized body / timeout / shutdown (in-flight requests complete, new ones are refused) are tested
+- The repository has no HTTP/2 / ORM / templates (TLS was accepted in Phase 3)
+- hello depends only on public headers
+- No new leaks or UAF under debug + ASan. Apple Clang's ASan on macOS has no LeakSanitizer
+  (`detect_leaks is not supported on this platform`), so the debug preset only shows UAF.
+  Leaks are checked by building with ASan using Homebrew LLVM's clang and running every test with
+  `ASAN_OPTIONS=detect_leaks=1` (2026-09-21, LLVM 23, 234 tests, 0 leaks)
+- The diff contains no files nobody asked for
 
-Phase 2（CORS）
+Phase 2 (CORS)
 
-- `Origin` 付きの GET に `Access-Control-Allow-Origin` が付き、既定は `*`、設定すればその値
-- `Origin` の無い要求（空の `Origin:` を含む）には `Access-Control-*` が付かない
-- `OPTIONS` + `Origin` が 204 で、`Allow-Methods` / `Allow-Headers` が付き、ハンドラを呼ばない
-- 固定 origin では、`Origin` の有無やエラー応答に関わらず `Vary: Origin` が付く。既存の `Vary` は残る
-- 404 にも `Access-Control-Allow-Origin` が付く
+- A GET with `Origin` gets `Access-Control-Allow-Origin`: `*` by default, the configured value if set
+- A request without `Origin` (including an empty `Origin:`) gets no `Access-Control-*`
+- `OPTIONS` + `Origin` is 204 with `Allow-Methods` / `Allow-Headers`, and the handler is not called
+- With a fixed origin, `Vary: Origin` is sent whether or not `Origin` is present and even on error responses. An existing `Vary` is kept
+- A 404 also gets `Access-Control-Allow-Origin`
 
-Phase 2（静的ファイル）
+Phase 2 (static files)
 
-- root 内のファイルが拡張子に合った `Content-Type` で返る。ディレクトリは `index.html` を返す
-- 無いファイル・root の外（`..`・絶対パス・root 外への symlink）・NUL 入りのパスは 404
-- `max_bytes` を超えるファイルは 404
-- 登録時に無い root も、後から作れば配られる
+- Files inside root are returned with the `Content-Type` for their extension. A directory returns `index.html`
+- Missing files, paths outside root (`..`, absolute paths, symlinks leading outside root) and paths containing NUL are 404
+- Files larger than `max_bytes` are 404
+- A root that does not exist at registration is served once it is created
 
-Phase 2（レート制限）
+Phase 2 (rate limiting)
 
-- 窓内で `max` を超えると 429 と `Retry-After`（切り上げ、最小 1）
-- キーは接続の peer。`X-Forwarded-For` を変えても同じ窓に入る。keep-alive の要求は同じ窓に入る
-- 窓を過ぎると数え直す。過ぎたキーは掃除される
+- Going over `max` within the window gives 429 with `Retry-After` (rounded up, at least 1)
+- The key is the connection's peer. Changing `X-Forwarded-For` lands in the same window. Keep-alive requests land in the same window
+- After the window passes, counting starts over. Expired keys are swept
 
-Phase 3（静的ファイルのストリーミング送出）
+Phase 3 (streaming static files)
 
-- ファイルサイズに関わらず 1 応答のメモリが 64 KiB で頭打ちになる
-- `Content-Length` が実際の送出バイト数と一致し、`Transfer-Encoding: chunked` が付かない
-- ストリーミング応答の後で keep-alive の次の要求が通る
-- 0 バイトのファイルが 200 / `Content-Length: 0` で返る
-- 既定引数で `max_bytes` の上限が掛からない
+- Memory per response caps at 64 KiB whatever the file size
+- `Content-Length` equals the bytes actually sent, and there is no `Transfer-Encoding: chunked`
+- The next keep-alive request succeeds after a streamed response
+- A 0-byte file returns 200 / `Content-Length: 0`
+- With the default arguments, `max_bytes` imposes no limit
 
-Phase 3（TLS）
+Phase 3 (TLS)
 
-- TLS で `GET /` が 200 を返し、同じ接続で 2 本目も通る
-- `tls()` した App に平文クライアントが繋いでも応答を得られない
-- 読めない証明書 / 鍵で `tls()` が投げる
-- 静的ファイルのストリーミングが TLS 上でも `Content-Length` ちょうどで届く
+- `GET /` over TLS returns 200, and a second request on the same connection succeeds too
+- A plaintext client connecting to an App with `tls()` gets no response
+- `tls()` throws on an unreadable certificate / key
+- Static-file streaming arrives with exactly `Content-Length` bytes over TLS too
 
-Phase 3（OpenAPI 生成）
+Phase 3 (OpenAPI generation)
 
-- 登録した全ルートが `paths` に出る
-- `:id` が `parameters` になる（`in: path`、`required: true`、`type: string`）
-- 同じパスの GET と POST が 1 つの path 項目にまとまる
-- 登録していないメソッドのキーが出ない
-- ワイルドカードの parameter に `x-hayate-wildcard` が付く
-- `group()` の prefix が付いた形で出る
+- Every registered route appears in `paths`
+- `:id` becomes a `parameters` entry (`in: path`, `required: true`, `type: string`)
+- GET and POST on the same path are merged into one path item
+- No keys appear for methods that were not registered
+- Wildcard parameters carry `x-hayate-wildcard`
+- Paths appear with the `group()` prefix applied
 
-Phase 3（JWT 検証）
+Phase 3 (JWT verification)
 
-- 有効なトークンが 200 で、ハンドラが `Claims` から `sub` を読める
-- ヘッダ欠落 / 形式不正 / 署名改竄 / payload 改竄 / `exp` 切れ / `exp` 無し / `nbf` 未来 /
-  `alg: none` / `alg` 詐称（RS256 ヘッダを HMAC で署名）がすべて 401
-- 401 に `WWW-Authenticate: Bearer` が付く
-- `leeway` の内側で切れたトークンは通る
-- `secret` が空だと `jwt()` が投げる
-- group の外は無認証で通る
+- A valid token gives 200, and the handler can read `sub` from `Claims`
+- Missing header / malformed / tampered signature / tampered payload / expired `exp` / no `exp` / future `nbf` /
+  `alg: none` / spoofed `alg` (an RS256 header signed with HMAC) are all 401
+- The 401 carries `WWW-Authenticate: Bearer`
+- A token that expired within `leeway` passes
+- `jwt()` throws when `secret` is empty
+- Routes outside the group pass without authentication
 
-Phase 3（metrics）
+Phase 3 (metrics)
 
-- 2 本投げてから読むと `requests_total` が 2
-- 404 を投げると `4xx` が 1 増え、`5xx` は増えない
-- `max_connections` 超過の接続で `rejected_total` が 1 増える
-- 1 接続につき `accepted_total` が 1 増える
+- After two requests, `requests_total` reads 2
+- A 404 raises `4xx` by 1 and leaves `5xx` alone
+- A connection over `max_connections` raises `rejected_total` by 1
+- Each connection raises `accepted_total` by 1
 
-## 技術判断
+## Technical decisions
 
-- 言語: C++20 厳守。`std::expected` は使わない
-- ビルド: CMake 3.28+、Presets `debug` / `release` / `test` / `tsan`。debug は ASan + UBSan、`tsan` は TSan。
-  `test` は `debug` と同じビルドディレクトリ（`--preset debug` の直後に `--build --preset test` が通る）
-- 対象: macOS (Apple Clang) と Linux (GCC 13+ / Clang 16+)。Windows は後追い。
-  Linux は CI（GitHub Actions、ubuntu-24.04、GCC 13 と Clang 16、`test` と `tsan`）で確かめる。
-  GCC 12 は対象にしない。co_await 式の中に置いた捕獲付きラムダの一時オブジェクトで、捕獲したものの
-  デストラクタを 2 回呼ぶ（GCC PR 101367。13 で修正、12 には backport されていない）。ハンドラの中の
-  ごく普通の書き方で当たる
-- I/O: Boost.Asio 1.83+。`asio::awaitable` / `co_spawn`。公開ヘッダで `namespace asio = boost::asio;`
-- ファイル I/O: ブロッキング FS 呼び出しは `asio::thread_pool` に逃がす。`asio::stream_file` は `BOOST_ASIO_HAS_FILE`（Windows ハンドル / Linux io_uring）依存で macOS に無いため使わない
-- HTTP: Boost.Beast（HTTP/1.1）
-- TLS: OpenSSL 3 via `asio::ssl`。`find_package(OpenSSL 3 REQUIRED)`。最低 TLS 1.2
-- JSON: nlohmann/json v3.11.3 1 本。`hayate::Json` は `nlohmann::json` の別名。現行 glaze は C++23 必須のため採用しない。混在禁止
-- エラー: `hayate::Result<T>` は `std::variant<T, Error>` の薄い自前 1 本。Boost.Outcome は使わない
-- テスト: GoogleTest。実装の前に失敗するテスト。ループバック + エフェメラルポート。スリープ同期しない。
-  テスト用クライアントは非同期 I/O で期限を効かせ（Beast の期限は同期 I/O に効かない）、CTest にも TIMEOUT を置く
-- 依存: Boost と OpenSSL は `find_package`。nlohmann/json と GoogleTest は FetchContent。vcpkg は使わない
-- 配布: 注釈付きタグのソースだけ。取り込みは FetchContent / `add_subdirectory` で、ターゲットは `hayate::hayate`。
-  install / export は無い（nlohmann/json を FetchContent で持つので、`find_dependency` で解く経路まで要る）
-- 版: SemVer。0.x の間はマイナーで公開 API を壊してよい。パッチでは壊さない
-- 所有: Request が要求の文字列（target・ヘッダ・本文）を持ち、アクセサは `string_view` / `span<const byte>` を返す。寿命は Request
-- スレッド: io_context あたり 1。`app.threads(n)` で複数。共有可変は strand か mutex を書いてから
-- 並行の単位は接続。1 接続 1 strand で直列、異なる接続は並行に走る
-- 禁止: `new`/`delete`/`malloc`、生配列、ハンドラ境界をまたぐ例外、共有可変グローバル
-- 作業順: この SPEC → 公開ヘッダ → 失敗するテスト → 最小実装 → 全テスト → 停止
-- 正本は `docs/SPEC.md`。ER が参照する ARCHITECTURE は本 SPEC の『ルーティング』節。
+- Language: strict C++20. No `std::expected`
+- Build: CMake 3.28+, presets `debug` / `release` / `test` / `tsan`. debug has ASan + UBSan, `tsan` has TSan.
+  `test` shares the build directory with `debug` (`--build --preset test` works right after `--preset debug`)
+- Targets: macOS (Apple Clang) and Linux (GCC 13+ / Clang 16+). Windows comes later.
+  Linux is checked in CI (GitHub Actions, ubuntu-24.04, GCC 13 and Clang 16, `test` and `tsan`).
+  GCC 12 is not a target. For a temporary capturing lambda placed inside a co_await expression, it runs the
+  destructors of the captures twice (GCC PR 101367, fixed in 13, not backported to 12). Perfectly ordinary
+  handler code hits it
+- I/O: Boost.Asio 1.83+. `asio::awaitable` / `co_spawn`. Public headers declare `namespace asio = boost::asio;`
+- File I/O: blocking filesystem calls are moved to an `asio::thread_pool`. `asio::stream_file` is not used: it depends on `BOOST_ASIO_HAS_FILE` (Windows handles / Linux io_uring) and does not exist on macOS
+- HTTP: Boost.Beast (HTTP/1.1)
+- TLS: OpenSSL 3 via `asio::ssl`. `find_package(OpenSSL 3 REQUIRED)`. TLS 1.2 minimum
+- JSON: nlohmann/json v3.11.3 only. `hayate::Json` is an alias of `nlohmann::json`. Current glaze requires C++23, so it is not used. No mixing
+- Errors: `hayate::Result<T>` is a single thin in-house `std::variant<T, Error>`. No Boost.Outcome
+- Tests: GoogleTest. A failing test before the implementation. Loopback + ephemeral ports. No sleep-based synchronization.
+  Test clients use async I/O so their deadlines take effect (Beast's deadlines do not apply to sync I/O), and CTest has a TIMEOUT too
+- Dependencies: Boost and OpenSSL via `find_package`. nlohmann/json and GoogleTest via FetchContent. No vcpkg
+- Distribution: source at annotated tags only. Consumers use FetchContent / `add_subdirectory`, and the target is `hayate::hayate`.
+  There is no install / export (nlohmann/json comes from FetchContent, so that would also need a path that resolves it with `find_dependency`)
+- Versioning: SemVer. While 0.x, a minor release may break the public API. A patch release does not
+- Documents: English is canonical. The Japanese translation sits next to each file as `*.ja.md`.
+  Change the English first and the translation in the same commit. When they disagree, the English wins
+- Ownership: Request owns the request strings (target, headers, body), and its accessors return `string_view` / `span<const byte>`. Their lifetime is the Request
+- Threads: one per io_context. Several with `app.threads(n)`. Shared mutable state needs a strand or a mutex, written down first
+- The unit of concurrency is the connection. One strand per connection serializes it; different connections run in parallel
+- Banned: `new`/`delete`/`malloc`, raw arrays, exceptions crossing the handler boundary, shared mutable globals
+- Work order: this SPEC → public headers → failing tests → minimal implementation → all tests → stop
+- The canonical source is `docs/SPEC.md`. The ARCHITECTURE that the ER refers to is the "Routing" section of this SPEC.
 
-## Phase 1 公開 API
+## Phase 1 public API
 
 ### Result / Error
 
@@ -194,9 +198,9 @@ public:
 }
 ```
 
-`ok()==false` で `value()`、`ok()==true` で `error()` は契約違反（assert）。例外で結果を返さない。
-`std::move(r).value()` の後の `r` は読まない（中身は move 済みで、`ok()` は true のまま）。
-`error()` は `const&` だけで、move して取り出す版は持たない。
+`value()` when `ok()==false`, and `error()` when `ok()==true`, are contract violations (assert). Results are never returned through exceptions.
+Do not read `r` after `std::move(r).value()` (its contents have been moved from, and `ok()` stays true).
+`error()` exists only as `const&`; there is no version that moves the error out.
 
 ### Handler / Middleware
 
@@ -206,69 +210,69 @@ using Next = Handler;
 using Middleware = std::function<asio::awaitable<Response>(Request&, Next)>;
 ```
 
-`App::get/post` は次を受け付ける。
+`App::get/post` accept:
 
 - `asio::awaitable<Response>(Request&)`
-- `Response(Request&)`（内部で awaitable に包む）
-- どちらも **const で呼べること**（`mutable` ラムダは不可、コンパイル時に弾く）。ハンドラは全接続で
-  共有されるので、状態を持たせると `threads(n>1)` で競合する。状態は App か Request の Extension に置く。
-  条件は公開 concept `hayate::HandlerCallable` で表す
+- `Response(Request&)` (wrapped into an awaitable internally)
+- Either way it must be **callable as const** (`mutable` lambdas are rejected at compile time). Handlers are shared
+  by all connections, so state kept in them races under `threads(n>1)`. Put state in the App or a Request Extension.
+  The requirement is expressed by the public concept `hayate::HandlerCallable`
 
-onion: 入りは登録順 A→B、戻りは B→A。`next` を呼ばなければ短絡。
-App の `use()` は 404/405 を含む dispatch 全体を包む（CORS preflight とエラー応答にヘッダが要る）。
-413 / 431 と、送れないヘッダを差し替えた 500 は Router に届く前か後に Connection が作るので、App の MW も
-通らない（CORS のヘッダも付かない）。
-`group` の MW はマッチしたルートにだけ付く。group のパスで出る 404 / 405 はどのルートにも
-マッチしていないので、group の MW を通らない（App の MW だけ）。
-入れ子は App → 外の group → 内の group → ハンドラ。`use()` は呼んだ位置に関係なく、その App / Router の
-全ルートに付く。
-ハンドラと MW が投げた例外は `dispatch` が 500 に変換する。接続は閉じない。
+Onion: in registration order A→B on the way in, B→A on the way out. Not calling `next` short-circuits.
+The App's `use()` wraps the whole dispatch, 404/405 included (CORS preflight and error responses need headers).
+413 / 431, and the 500 that replaces an unsendable header, are made by the Connection before or after the Router, so they
+skip App middleware too (and get no CORS headers).
+`group` middleware attaches only to matched routes. A 404 / 405 under a group's path matched no route,
+so it skips the group's middleware (App middleware only).
+Nesting is App → outer group → inner group → handler. `use()` applies to every route of that App / Router,
+wherever it is called.
+Exceptions thrown by handlers and middleware are turned into 500 by `dispatch`. The connection stays open.
 
-### ルーティング
+### Routing
 
-- メソッドは `GET` と `POST` のみ。`Router::add` に他のメソッドを渡すと `std::invalid_argument` を投げる
-- `:name` は空でない 1 セグメント。`*name` は残り全部（空でも可）で、最後のセグメントにだけ置ける
-- 名前の無い `:` / `*` と、最後以外の `*name` は登録時に `std::invalid_argument` を投げる
-- 欠けた param / query / header は空 `string_view`
-- 一致優先: 各セグメントで static > param > wildcard。そこまで同点で片方だけが空の `*name` で
-  終わるなら、終わらない方（`/a` と `/a/*rest` への `GET /a` は `/a`）。登録順では決めない
-- 同じメソッドで同じ形（各セグメントの種類と static の文字列が同じ。param / wildcard の名前は見ない）を
-  2 回登録したら投げる。後の方に一致する要求は無い
-- パス無し 404。パスはあるがメソッド違い 405 + `Allow`
-- パターンの先頭 `/` は省略できる（`get("ping")` は `/ping`）。OpenAPI にも `/` 付きで出る
-- `group(prefix, fn)` は接頭辞を連結する。継ぎ目に `/` が無ければ補う（`group("/api")` + `get("ping")` は
-  `/api/ping`）。連結した全体で、連続する `/` を 1 つに畳む。末尾 `/` は消さない
-- `/a` と `/a/` は別ルート
-- パスはセグメントに分けてからパーセントデコードする。`%2F` は区切りにせずセグメント内の `/` になる
-- query はパーセントデコードし、`+` は空白として読む
-- 壊れた `%` 列は復号せずそのまま残す
-- `target()` と `path()` は生のまま。復号後が見えるのは `param()` と `query()`
+- Methods are `GET` and `POST` only. Passing any other method to `Router::add` throws `std::invalid_argument`
+- `:name` is one non-empty segment. `*name` is the whole rest (may be empty) and may only be the last segment
+- A `:` / `*` without a name, and a `*name` that is not last, throw `std::invalid_argument` at registration
+- A missing param / query / header is an empty `string_view`
+- Match priority: static > param > wildcard at each segment. If still tied and exactly one of them ends with an empty `*name`,
+  the other one wins (`GET /a` against `/a` and `/a/*rest` picks `/a`). Registration order never decides
+- Registering the same shape (same kind for every segment and same static text; param / wildcard names are ignored)
+  twice for the same method throws. No request could ever reach the later one
+- No matching path is 404. A matching path with the wrong method is 405 + `Allow`
+- The leading `/` of a pattern may be omitted (`get("ping")` is `/ping`). OpenAPI shows it with the `/` too
+- `group(prefix, fn)` concatenates prefixes and inserts a `/` at the joint if it is missing (`group("/api")` + `get("ping")` is
+  `/api/ping`). Runs of `/` in the joined whole collapse to one. A trailing `/` is kept
+- `/a` and `/a/` are different routes
+- A path is split into segments before percent-decoding. `%2F` does not split; it becomes a `/` inside the segment
+- Queries are percent-decoded, and `+` reads as a space
+- Malformed `%` sequences are left as they are, undecoded
+- `target()` and `path()` are raw. Decoded values are visible only through `param()` and `query()`
 
-### App 寿命
+### App lifetime
 
-- App と `Router` はコピーもムーブもできない。`Router` は App が持つものと、`group()` が `fn` に渡す
-  一時的なものだけ
-- App が `io_context` と `Router` と `Limits` と acceptor を所有する
-- `bind(host, port)` は socket bind + listen まで同期。`port()==0` ならエフェメラル
-- `port()` は bind 後の実ポート
-- `run()` は accept ループ。`asio::awaitable<void>`。`stop()` で終わる。
-  acceptor は App の `io_context` に束縛されているので、`run()` もその `io_context` 上で spawn する。
-  外部の executor では動かない
-- accept が失敗しても accept ループは終えない（終えるのは `stop()` だけ）。失敗したら 100 ms 待って
-  次の accept へ（fd 枯渇で空回りしない）。`stop()` はその待ちも取り消す
-- accept した接続ごとに strand を 1 本作る。その接続の socket・stream・タイマー・coroutine は
-  すべてその strand 上で動く（`threads(n)` で n>1 のとき Beast の stream が要求する条件）
-- accept ループと `stop()` は管理用 strand 1 本で直列化する。`stop()` はどのスレッドから
-  何度呼んでもよく、効果は 1 回分
-- `serve()` は `threads(n)`（既定 1）で io_context を blocking 実行する。SIGINT/SIGTERM で `stop()`
-- `stop()` は新規 accept を止め、in-flight の読書きを完了させてから io_context を止める
-- 要求の到着を待っている接続（TLS ハンドシェイク中、1 本目のヘッダ待ち、keep-alive の次のヘッダ待ち）は
-  `stop()` ですぐ閉じる。ヘッダが途中まで来ていても閉じる（要求はまだ完成していない）。ヘッダが揃った
-  要求（本文の読み・ハンドラ・書き込み）は完了させ、`Connection: close` で閉じる
+- App and `Router` can be neither copied nor moved. The only `Router`s are the one the App owns and the temporary one
+  `group()` passes to `fn`
+- The App owns the `io_context`, the `Router`, the `Limits` and the acceptor
+- `bind(host, port)` is synchronous up to socket bind + listen. Port 0 means ephemeral
+- `port()` is the actual port after bind
+- `run()` is the accept loop, an `asio::awaitable<void>`. It ends on `stop()`.
+  The acceptor is bound to the App's `io_context`, so `run()` must be spawned on that `io_context` too.
+  It does not work on an external executor
+- An accept failure does not end the accept loop (only `stop()` does). After a failure it waits 100 ms before the
+  next accept (no busy loop on fd exhaustion). `stop()` cancels that wait as well
+- Each accepted connection gets its own strand. That connection's socket, stream, timers and coroutine all
+  run on it (Beast streams require this when `threads(n)` has n>1)
+- The accept loop and `stop()` are serialized on one admin strand. `stop()` may be called from any thread
+  any number of times; it takes effect once
+- `serve()` runs the io_context blocking on `threads(n)` threads (default 1). SIGINT/SIGTERM call `stop()`
+- `stop()` stops new accepts, lets in-flight reads and writes finish, then stops the io_context
+- Connections waiting for a request to arrive (TLS handshake, waiting for the first header, waiting for the next keep-alive header)
+  are closed by `stop()` at once, even if part of a header has arrived (the request is not complete yet). A request whose
+  header is complete (reading the body, the handler, writing) is finished and closed with `Connection: close`
 
-### Limits 既定
+### Limits defaults
 
-| 項目 | 既定 |
+| Setting | Default |
 |---|---|
 | max_header_bytes | 8192 |
 | max_body_bytes | 1048576 |
@@ -277,52 +281,52 @@ App の `use()` は 404/405 を含む dispatch 全体を包む（CORS preflight 
 | idle_timeout | 60s |
 | max_connections | 1024 |
 
-超過: header 431、body 413。read/write/idle 切れは接続を閉じる（応答を書けなければ書かない）。`max_connections` 超過の新規は accept してすぐ閉じる（応答は書かない）。
+Exceeded: header 431, body 413. A read/write/idle timeout closes the connection (no response if one cannot be written). A new connection over `max_connections` is accepted and closed at once (no response).
 
-Beast / Asio の失敗は、応答を書ける段階なら `Error` にして応答する（413 / 431 / 500）。書けない段階（timeout・相手の切断・handshake 失敗）なら閉じるだけで、受け取る側のない `Error` は作らない。
+Beast / Asio failures become an `Error` and a response (413 / 431 / 500) while a response can still be written. When it cannot (timeout, peer disconnect, handshake failure), the connection is just closed, and no `Error` is created that nobody would receive.
 
-窓の切り分け: 1 本目のヘッダ読みは `read_timeout`。keep-alive で次の要求のヘッダを待つ間は `idle_timeout`。ヘッダが揃った後の本文読みは何本目でも `read_timeout`。
+Which window applies: reading the first header uses `read_timeout`. Waiting for the next request's header on keep-alive uses `idle_timeout`. Reading the body once the header is complete uses `read_timeout` for every request.
 
-HTTP/1.1 の約束:
+HTTP/1.1 promises:
 
-- HEAD はルーティングしない（GET 扱いにしない。404 / 405 のまま）。ただし HEAD への応答は
-  ステータスによらず本文を送らない。`Content-Length` は本文を送った場合の値を付ける
-- `Expect: 100-continue` の要求には、本文を読む前に `100 Continue` を返す。
-  `Content-Length` が `max_body_bytes` を超えるなら 100 を出さずに 413。
-  HTTP/1.0 の要求の 100-continue は無視する（1xx を知らない。RFC 9110 §10.1.1）
-- 接続を続けるかは「サーバーの判断」かつ「応答の `Connection`」。ハンドラが `Connection: close` を
-  付ければ閉じる。サーバーが閉じると決めたら（要求が close、停止中など）、ハンドラの keep-alive は
-  無視して `Connection: close` を送る。送ったヘッダと実際の挙動を食い違わせない
-- 1xx / 204 / 304 の応答は本文を持たない。ハンドラの本文は捨て、`Content-Length` /
-  `Transfer-Encoding` は付けない（RFC 9110 §8.6、§6.4.1）
-- ヘッダの名前か値が 65533 バイト（Beast の上限）を超える応答は送れない。500 に差し替え、metrics も 500 で数える
+- HEAD is not routed (it is not treated as GET, so it stays 404 / 405). But a response to HEAD never carries a body,
+  whatever the status. `Content-Length` is the value it would have if the body were sent
+- For a request with `Expect: 100-continue`, `100 Continue` is sent before the body is read.
+  If `Content-Length` exceeds `max_body_bytes`, 413 is sent without the 100.
+  100-continue on HTTP/1.0 requests is ignored (they do not know 1xx; RFC 9110 §10.1.1)
+- The connection continues only if both "the server decides so" and "the response's `Connection` allows it". If the handler sets
+  `Connection: close`, it closes. Once the server decides to close (the request asked for close, stopping, …), the handler's keep-alive
+  is ignored and `Connection: close` is sent. The header sent and the actual behavior never disagree
+- 1xx / 204 / 304 responses have no body. The handler's body is dropped, and neither `Content-Length` nor
+  `Transfer-Encoding` is sent (RFC 9110 §8.6, §6.4.1)
+- A response with a header name or value over 65533 bytes (Beast's limit) cannot be sent. It is replaced by 500, and metrics count it as 500
 
 ### JSON
 
-- `Response::json(Json)` は 200 / `application/json`
-- `Request::json()` は body を `Json` として読む。破損は `Error{code:"bad_json", http_status:400}`
-- `Request::json<T>()` は型不一致も同じ 400
-- Content-Type 検査はしない（body バイトだけ見る）
+- `Response::json(Json)` is 200 / `application/json`
+- `Request::json()` reads the body as `Json`. Malformed input is `Error{code:"bad_json", http_status:400}`
+- `Request::json<T>()` returns the same 400 on a type mismatch
+- There is no Content-Type check (only the body bytes are looked at)
 
-### Response ヘッダ
+### Response headers
 
-- `set_header(name, value)` は同名を置き換える（大文字小文字は無視）
-- `name` が HTTP token でなければ何もしない
-- `value` から CTL（`\r` `\n` を含む）を落とし、前後の空白を削る。ヘッダ注入を断つ
+- `set_header(name, value)` replaces a header of the same name (case-insensitive)
+- It does nothing if `name` is not an HTTP token
+- It strips CTLs (including `\r` `\n`) from `value` and trims surrounding whitespace. This blocks header injection
 
 ### Extension
 
 ```cpp
 template<typename T, typename... Args>
-T& Request::set(Args&&... args);  // 同じ T は上書き
+T& Request::set(Args&&... args);  // the same T overwrites
 template<typename T>
-T* Request::get() noexcept;       // 無ければ nullptr
+T* Request::get() noexcept;       // nullptr if absent
 ```
 
-寿命は Request。ポインタを Response / App に保存しない。
-同じ `T` を `set` し直すと前の値は壊れ、前に返した参照とポインタは無効になる。
+The lifetime is the Request. Do not store the pointer in a Response / App.
+`set` of the same `T` again destroys the previous value and invalidates the references and pointers returned before.
 
-### TLS（Phase 3）
+### TLS (Phase 3)
 
 ```cpp
 app.tls({.cert_file = "server.pem", .key_file = "server.key"})
@@ -330,18 +334,18 @@ app.tls({.cert_file = "server.pem", .key_file = "server.key"})
    .serve();
 ```
 
-- 新しい公開型は設定値 struct `Tls` 1 つだけ。`TlsContext` のようなクラスは作らない
-- `ssl::context` は App が内部で組む。公開ヘッダに `asio::ssl` は出さない
-- `tls()` を呼んだ App は全接続が TLS。平文との同時待ち受けはしない
-- 証明書 / 鍵が読めない、または鍵が証明書と対でなければ `tls()` が投げる（`bind()` と同じく設定時に落とす）
-- `key_password` が空なら鍵にパスフレーズ無しとして扱う。暗号化された鍵なら `tls()` が投げる（端末で尋ねない）
-- ハンドシェイクの窓は `read_timeout`。失敗した接続は応答を書かずに閉じる
-- 終了は TLS shutdown → socket shutdown の順。相手の close_notify を待つのは `write_timeout` まで。
-  停止中は close_notify を送るだけで返事を待たない（RFC 8446 §6.1。待つと `serve()` が戻らない）
-- sslv2 / sslv3 / tlsv1 / tlsv1.1 を無効化する。最低 TLS 1.2
-- `Request::peer()` は TLS でも accept 時の remote IP
+- The only new public type is the settings struct `Tls`. No class like `TlsContext`
+- The App builds the `ssl::context` internally. `asio::ssl` does not appear in public headers
+- After `tls()`, every connection of the App is TLS. There is no plaintext listener alongside it
+- `tls()` throws if the certificate / key cannot be read or the key does not pair with the certificate (it fails at configuration time, like `bind()`)
+- An empty `key_password` means the key has no passphrase. For an encrypted key `tls()` throws (it never prompts on the terminal)
+- The handshake window is `read_timeout`. A failed connection is closed without writing a response
+- Closing is TLS shutdown, then socket shutdown. Waiting for the peer's close_notify is bounded by `write_timeout`.
+  While stopping, close_notify is sent without waiting for the reply (RFC 8446 §6.1; waiting would keep `serve()` from returning)
+- sslv2 / sslv3 / tlsv1 / tlsv1.1 are disabled. TLS 1.2 minimum
+- `Request::peer()` is the remote IP at accept, over TLS too
 
-### OpenAPI 生成（Phase 3）
+### OpenAPI generation (Phase 3)
 
 ```cpp
 app.get("/openapi.json", [&app](hayate::Request &) {
@@ -349,102 +353,102 @@ app.get("/openapi.json", [&app](hayate::Request &) {
 });
 ```
 
-- `Json hayate::openapi(const App&, OpenApiInfo = {})`。Handler も Middleware も返さない
-- 新しい公開型は設定値 struct `OpenApiInfo{title, version}` だけ
-- 出るのは `openapi` / `info` / `paths` の 3 つ。`"openapi": "3.1.0"`
-- 情報源は登録済みルートの `pattern` と `method` だけ。
-  **body / response のスキーマは出さない**（Router が型情報を持っていない）
-- `:name` → `{name}`、`*name` → `{name}` + `x-hayate-wildcard: true`
-  （OpenAPI の `{}` は本来 `/` を含まないので、違いを機械可読な形で残す）
-- 静的セグメントは RFC 3986 の pchar 以外（`{` `}` `%` を含む）を percent-encode する。
-  静的な `{id}` がテンプレート変数に化けず、`/a/{}` と `/a/:x` が同じ形にまとまらない
-- path パラメータは `in: path` / `required: true` / `schema: {type: string}`
-- 同じパスの GET と POST は 1 つの path 項目にまとまる
-- 形が同じでパラメータ名だけ違うパス（GET `/users/:id` と POST `/users/:name`）も 1 つにまとめる。
-  OpenAPI では同じテンプレートとして扱われるため。キーとパラメータ名は最初に登録したルートのもの。
-  同じメソッドの同じ形は登録時に投げるので、まとまるのは GET と POST の間だけ
-- 各 operation の `responses` は `default` 1 つだけ。ステータスを知らないので創作しない
-- `group()` の prefix は畳み込まれた形（`/api/users`）で出る
-- 文書の配り方は決めない。ルートに載せるのは利用者の仕事
-- スキーマ推論 / `summary` / `tags` / `servers` / 認証定義 / YAML 出力はしない
+- `Json hayate::openapi(const App&, OpenApiInfo = {})`. It returns neither a Handler nor a Middleware
+- The only new public type is the settings struct `OpenApiInfo{title, version}`
+- Only `openapi` / `info` / `paths` are emitted. `"openapi": "3.1.0"`
+- The only sources are the `pattern` and `method` of the registered routes.
+  **No body / response schemas** (the Router has no type information)
+- `:name` → `{name}`, `*name` → `{name}` + `x-hayate-wildcard: true`
+  (an OpenAPI `{}` normally does not contain `/`, so the difference is kept in machine-readable form)
+- Static segments percent-encode everything outside RFC 3986 pchar (including `{` `}` `%`).
+  A static `{id}` never turns into a template variable, and `/a/{}` and `/a/:x` do not merge into one shape
+- Path parameters are `in: path` / `required: true` / `schema: {type: string}`
+- GET and POST on the same path are merged into one path item
+- Paths of the same shape that differ only in parameter names (GET `/users/:id` and POST `/users/:name`) are merged too,
+  because OpenAPI treats them as the same template. The key and parameter names come from the route registered first.
+  The same method with the same shape throws at registration, so merging only happens between GET and POST
+- Each operation's `responses` has only `default`. The statuses are unknown, so none are invented
+- `group()` prefixes appear folded in (`/api/users`)
+- How the document is served is not decided. Putting it on a route is the user's job
+- No schema inference / `summary` / `tags` / `servers` / security definitions / YAML output
 
-### JWT 検証（Phase 3）
+### JWT verification (Phase 3)
 
 ```cpp
 app.use(hayate::mw::jwt({.secret = "...", .issuer = "", .audience = "",
                          .leeway = std::chrono::seconds(60)}));
 ```
 
-- Middleware。公開型は設定 struct `Jwt` と `Claims` の 2 つだけ
-- **HS256 のみ**。`alg` がそれ以外なら 401（`none` とアルゴリズム混同を断つ）
-- 検証の順
-  1. `Authorization` が `Bearer` と 1 つ以上の空白で始まる（スキームは大小無視。RFC 6750 の `1*SP`。
-     タブは空白に数えない）
-  2. `.` で 3 つちょうどに割れる
-  3. header と payload が base64url（パディング無し）で復号できる。末尾の未使用ビットが 0 でない
-     符号は正準でないので復号できないとみなす（署名も同じ。1 つの署名に綴りが何通りもできない）
-  4. header の `alg` が `HS256`（文字列でなければ 401）
-  5. `HMAC-SHA256(secret, header_b64 + "." + payload_b64)` と署名が一致。比較は定数時間。
-     HMAC の計算に失敗した場合と、計算結果が 32 バイトでない場合は 401（空署名として通さない）
-  6. payload が JSON オブジェクト。`exp` があり、`now > exp + leeway` でない。`exp` 無しは 401。
-     `exp` は int64 秒の整数のみ。小数・範囲外・非数値は 401。加算は飽和させ、溢れない
-  7. `nbf` があれば `now + leeway >= nbf`。`nbf` の型と範囲は `exp` と同じ
-  8. `issuer` 設定時は `iss` が一致（文字列でなければ 401）
-  9. `audience` 設定時は `aud` が一致（文字列、または配列に含む）
-- 失敗はすべて 401 + `WWW-Authenticate: Bearer`。本文は `Error{code: "unauthorized"}` から作る
-  text/plain の `Unauthorized`。どの検査で落ちたかは返さない
-- 通ったら `Claims` を Request Extension に入れる。寿命は Request
-- `secret` が空、または `leeway` が負なら `jwt()` が投げる（`tls()` と同じく設定時に落とす）
-- 適用範囲は `Router::group` で絞る。除外パスの設定項目は持たない
-- RS256 / ES256 / JWKS / 鍵回転 / トークン発行 / 認可判定はしない
-- トークンは `Authorization` からだけ取る。Cookie や query からは取らない
+- Middleware. The only public types are the settings struct `Jwt` and `Claims`
+- **HS256 only**. Any other `alg` is 401 (this blocks `none` and algorithm confusion)
+- Verification order
+  1. `Authorization` starts with `Bearer` and one or more spaces (the scheme is case-insensitive; RFC 6750 `1*SP`;
+     tabs do not count as spaces)
+  2. It splits on `.` into exactly 3 parts
+  3. The header and payload decode as base64url (no padding). An encoding whose unused trailing bits are not 0
+     is not canonical and counts as undecodable (the signature too, so one signature cannot have several spellings)
+  4. The header's `alg` is `HS256` (401 if it is not a string)
+  5. `HMAC-SHA256(secret, header_b64 + "." + payload_b64)` matches the signature, compared in constant time.
+     If the HMAC computation fails or its result is not 32 bytes, 401 (it never passes as an empty signature)
+  6. The payload is a JSON object. `exp` is present and `now > exp + leeway` does not hold. No `exp` is 401.
+     `exp` must be an integer number of seconds in int64; fractional, out-of-range or non-numeric values are 401. The addition saturates and never overflows
+  7. If `nbf` is present, `now + leeway >= nbf`. `nbf` has the same type and range rules as `exp`
+  8. If `issuer` is set, `iss` matches (401 if it is not a string)
+  9. If `audience` is set, `aud` matches (a string, or contained in an array)
+- Every failure is 401 + `WWW-Authenticate: Bearer`. The body is the text/plain `Unauthorized` built from
+  `Error{code: "unauthorized"}`. Which check failed is not revealed
+- On success, `Claims` is put into a Request Extension. Its lifetime is the Request
+- `jwt()` throws if `secret` is empty or `leeway` is negative (it fails at configuration time, like `tls()`)
+- The scope is narrowed with `Router::group`. There is no setting for excluded paths
+- No RS256 / ES256 / JWKS / key rotation / token issuance / authorization decisions
+- Tokens are taken only from `Authorization`, never from cookies or queries
 
-### metrics（Phase 3）
+### metrics (Phase 3)
 
 ```cpp
 app.get("/metrics", hayate::metrics(app));
 ```
 
-- Handler 工場。`Metrics` / `Service` のようなクラスは作らない
-- カウンタは App が 1 つ持つ。App をまたいで共有しない。グローバルにしない
-- `Content-Type` は `text/plain; version=0.0.4; charset=utf-8`
-- 出す系列
+- A Handler factory. No class like `Metrics` / `Service`
+- The App owns one set of counters. It is never shared across Apps and never global
+- `Content-Type` is `text/plain; version=0.0.4; charset=utf-8`
+- Series emitted
 
 ```
 hayate_connections_accepted_total   counter
-hayate_connections_rejected_total   counter  max_connections 超過で拒否した数
-hayate_connections_open             gauge    いま開いている接続
-hayate_requests_total               counter  書こうとした応答の数
-hayate_responses_total{class="Nxx"} counter  1xx..5xx の 5 本
+hayate_connections_rejected_total   counter  refused for exceeding max_connections
+hayate_connections_open             gauge    connections open now
+hayate_requests_total               counter  responses about to be written
+hayate_responses_total{class="Nxx"} counter  five series, 1xx..5xx
 ```
 
-- `requests_total` と `responses_total` は応答を書く直前に数える。書き込みが途中で失敗しても数える。
-  上限超過の 413 / 431 も数える（Router に届かなくても応答は返る）
-- 系列はそれぞれ独立に進む。1 回の出力の中で系列同士（`requests_total` と `responses_total` の和など）が
-  一致するとは限らない
-- `responses_total` のクラスは `status / 100`。範囲外は数えない
-- `/metrics` 自身は自分の出力に入らない。応答を書く直前に数えるので次のスクレイプに出る
-- ヒストグラム / per-route ラベル / OpenTelemetry は出さない
+- `requests_total` and `responses_total` are counted just before a response is written. They count even if the write fails midway.
+  The 413 / 431 from limits count too (a response goes out even though the Router was never reached)
+- Each series advances on its own. Within one output, series are not guaranteed to agree with each other
+  (for example `requests_total` and the sum of `responses_total`)
+- The `responses_total` class is `status / 100`. Statuses out of range are not counted
+- `/metrics` does not appear in its own output. It is counted just before its response is written, so it shows up in the next scrape
+- No histograms / per-route labels / OpenTelemetry
 
-### CORS（Phase 2）
+### CORS (Phase 2)
 
 ```cpp
 app.use(hayate::mw::cors());
 app.use(hayate::mw::cors({.origin = "https://app.example"}));
 ```
 
-- `hayate::mw::cors()` は Middleware。新しい公開型（Service 等）は足さない
-- ルート登録はこれまで通り GET / POST のみ。OPTIONS は `mw::cors` を入れたときだけ preflight として扱う
-  （入れなければ 404 / 405）
-- `Origin` が無ければ `Access-Control-*` ヘッダを付けない。空の `Origin:` も無いのと同じ
-- `Origin` がある GET/POST（および 404/405）: `Access-Control-Allow-Origin`（既定 `*`、設定があればその値）
-- `origin` が `*` 以外のときは `Vary: Origin` も付ける（共有キャッシュの取り違え防止）。
-  応答が `Origin` の有無で変わるので、`Origin` が無い要求への応答にも付ける
-- `Vary` は上書きしない。既存の値を残して `Origin` を足す。既に `Origin` か `*` を含むならそのまま
-- `OPTIONS` + `Origin`: 204。`Allow-Origin` / `Allow-Methods` / `Allow-Headers`。`next` を呼ばない
-- 既定 methods: `GET, POST, OPTIONS`。既定 headers: `Content-Type, Authorization`
+- `hayate::mw::cors()` is Middleware. No new public types (Service etc.)
+- Route registration stays GET / POST only. OPTIONS is treated as a preflight only when `mw::cors` is installed
+  (otherwise it is 404 / 405)
+- Without `Origin`, no `Access-Control-*` headers are added. An empty `Origin:` counts as absent
+- GET/POST (and 404/405) with `Origin`: `Access-Control-Allow-Origin` (`*` by default, the configured value if set)
+- When `origin` is not `*`, `Vary: Origin` is added too (so shared caches do not mix responses up).
+  The response depends on whether `Origin` is present, so responses to requests without `Origin` get it as well
+- `Vary` is not overwritten. Existing values are kept and `Origin` is added. If it already contains `Origin` or `*`, it is left as is
+- `OPTIONS` + `Origin`: 204 with `Allow-Origin` / `Allow-Methods` / `Allow-Headers`. `next` is not called
+- Default methods: `GET, POST, OPTIONS`. Default headers: `Content-Type, Authorization`
 
-### 静的ファイル（Phase 2 / 送出は Phase 3）
+### Static files (Phase 2 / sending is Phase 3)
 
 ```cpp
 app.get("/assets/*path", hayate::files("public"));
@@ -452,57 +456,57 @@ app.get("/assets/*path", hayate::files("public", 4u * 1024 * 1024));
 app.get("/assets/*path", hayate::files("public", 4u * 1024 * 1024, 4));
 ```
 
-- Handler 工場。`StaticFile` クラスは足さない（ER: Handler にぶら下がる）
-- 署名は `Handler files(std::string_view root, std::uint64_t max_bytes = 0, std::uint32_t io_threads = 2,
+- A Handler factory. No `StaticFile` class (ER: it hangs off Handler)
+- The signature is `Handler files(std::string_view root, std::uint64_t max_bytes = 0, std::uint32_t io_threads = 2,
   std::chrono::milliseconds fs_timeout = std::chrono::seconds(5))`
-- `max_bytes` は配布上限。既定 `0` は無制限。`0` 以外でそれを超える実ファイルは 404（存在を漏らさない）
-- root の末尾 `/` は無視する。登録時に root が無くても同じ扱い
-- 相対パスの root は登録時のカレントディレクトリで絶対パスに解決する（未作成でも）
-- wildcard 名は `path`。空なら `index.html`
-- root の外（`..` / 絶対パス）は 404（存在を漏らさない）
-- root 内かはパス要素単位で判定する。root が `/` でも配下を配る
-- 復号後のパスに NUL が入っていたら 404
-- 無いファイル・ディレクトリで `index.html` も無いときは 404
-- ディレクトリで `index.html` があればそれを返す
-- Content-Type は拡張子（`.html` / `.htm` `text/html`、`.css` `text/css`、`.js` `application/javascript`、`.json` `application/json`、`.txt` `text/plain`、その他 `application/octet-stream`）。拡張子の大小は見ない
+- `max_bytes` is the serving limit. The default `0` means unlimited. When non-zero, a real file larger than it is 404 (existence is not leaked)
+- A trailing `/` on root is ignored. The same holds when root does not exist at registration
+- A relative root is resolved to an absolute path against the current directory at registration (even if it does not exist yet)
+- The wildcard name is `path`. Empty means `index.html`
+- Outside root (`..` / absolute paths) is 404 (existence is not leaked)
+- Whether a path is inside root is judged per path element. Files under root are served even when root is `/`
+- A decoded path containing NUL is 404
+- A missing file, or a directory without `index.html`, is 404
+- A directory with `index.html` returns that file
+- Content-Type follows the extension (`.html` / `.htm` `text/html`, `.css` `text/css`, `.js` `application/javascript`, `.json` `application/json`, `.txt` `text/plain`, anything else `application/octet-stream`). Extension case is ignored
 
-I/O モデル:
+I/O model:
 
-- 正規化・stat・open・read は `files()` が所有するワーカープールで行う。io スレッドは filesystem を待たない
-- プールは `files()` 1 回につき 1 つ、`io_threads` 本。既定 2。`0` は 1 に切り上げる
-- 同時に走る読みは `io_threads` 本まで。溢れた分はプールのキューで待つ
-- ハンドラはバイトを読まない。`Response` に `FileSource`（path / size / プール / 開いたファイル）を載せ、
-  Connection が送出する。`path` は Content-Type の判定にだけ使う
-- ファイルの応答の `body()` は空（バイトはまだ読んでいない）。MW は `is_file()` / `file_source()` で見分ける
-- `FileSource` を作るのは `files()` だけ（開いたファイルの型は公開しない）。`pool` を取り出して
-  App より長く持たない。ワーカーの完了は App の `io_context` に戻るので、App が先に壊れると
-  壊れた strand を触る
-- **open はハンドラ側（ワーカー）で済ませる。**root 内かの判定は開いた fd の実パスに対して行い、
-  検証した対象と送る対象を同じにする。Connection は送出時にパスを辿り直さない（symlink 差し替えを防ぐ）
-- 通常ファイル以外（FIFO・デバイス・ディレクトリ）は 404。open で待たされないよう
-  非ブロッキングで開いてから種別を見て、通常ファイルと分かった時点で非ブロッキングを外す
-- FS 待ち（正規化・stat・open とプールの順番待ち）が `fs_timeout` を超えたら 503。
-  既定 5 秒。`files()` の第 4 引数で変える
-- 期限を過ぎて待つのをやめた場合も、ワーカーが触る状態は処理が終わるまで生かす。ただし置いていった仕事は
-  プールを持たない。プールの寿命を決めるのは `files()` のハンドラと送出中の `FileSource` だけで、App より
-  長く生きない（仕事の完了は App の `io_context` に戻るので、App が先に壊れると壊れた strand を触る）
-- 本体はサイズに関係なく常に 64 KiB ずつ送る。1 応答のメモリはファイルサイズに依らず 64 KiB
-- `Content-Length` を立てる。chunked encoding は使わない
-- 送るのは stat した `size` まで。stat 後に伸びても増やさない
-- ヘッダ送出後に読みが失敗したら（縮んだ・消えた）その場で接続を閉じる。status はもう直せない
-- `write_timeout` はチャンクごとに張り直す。大きいファイルの総送出時間は縛らない
-- 送出中のチャンク読みが `read_timeout` を超えたら接続を閉じる（応答はもう直せない）
+- Normalization, stat, open and read run on the worker pool owned by `files()`. io threads never wait on the filesystem
+- One pool per `files()` call, with `io_threads` threads. Default 2. `0` rounds up to 1
+- At most `io_threads` reads run at once. The rest wait in the pool's queue
+- The handler reads no bytes. It puts a `FileSource` (path / size / pool / open file) in the `Response`,
+  and the Connection sends it. `path` is used only to pick the Content-Type
+- A file response's `body()` is empty (the bytes have not been read yet). Middleware tells them apart with `is_file()` / `file_source()`
+- Only `files()` creates a `FileSource` (the open-file type is not public). Do not take the `pool` out and
+  keep it longer than the App. Worker completions return to the App's `io_context`, so if the App is destroyed first
+  they touch a destroyed strand
+- **Opening happens on the handler side (the worker).** Whether the file is inside root is judged on the real path of the opened fd,
+  so what was verified and what is sent are the same file. The Connection does not walk the path again when sending (this prevents symlink swaps)
+- Anything but a regular file (FIFO, device, directory) is 404. To avoid blocking in open, the file is opened
+  non-blocking, its type is checked, and non-blocking is cleared once it is known to be a regular file
+- If filesystem waits (normalization, stat, open, and queuing in the pool) exceed `fs_timeout`, 503.
+  Default 5 seconds. Change it with the 4th argument of `files()`
+- Even after waiting stops at the deadline, the state the worker touches is kept alive until the work finishes. But abandoned work
+  does not own the pool. Only the `files()` handler and `FileSource`s being sent decide the pool's lifetime, and it never outlives
+  the App (work completions return to the App's `io_context`, so if the App is destroyed first they touch a destroyed strand)
+- The body is always sent 64 KiB at a time, whatever the size. Memory per response is 64 KiB regardless of file size
+- `Content-Length` is set. No chunked encoding
+- Only up to the stat'ed `size` is sent. If the file grows after stat, nothing more is sent
+- If a read fails after the header was sent (the file shrank or disappeared), the connection is closed on the spot. The status can no longer change
+- `write_timeout` is re-armed for each chunk. The total send time of a large file is not bounded
+- If reading a chunk while sending exceeds `read_timeout`, the connection is closed (the response can no longer change)
 
-### レート制限（Phase 2）
+### Rate limiting (Phase 2)
 
 ```cpp
 app.use(hayate::mw::rate_limit({.max = 60, .window = std::chrono::seconds(60)}));
 ```
 
-- Middleware。固定窓。キーは `Request::peer()`（接続の remote IP。Connection.peer）
-- `peer` は accept 直後に 1 回だけ取り、その接続の全リクエストで同じ。取れなければ空で 1 つの窓に入る
-- 窓内で `max` を超えたら 429。`Retry-After` は窓の残り秒（切り上げ、最小 1）
-- 既定 `max` 60、`window` 60s
-- カウンタは MW が所有する mutex 付き map。グローバル禁止
-- 窓を過ぎたキーは掃除する（map を無制限に太らせない）。毎回は舐めない。前の掃除から窓 1 つ過ぎた後の
-  最初のリクエストで掃除するので、過ぎたキーはそれまで残る
+- Middleware. Fixed window. The key is `Request::peer()` (the connection's remote IP; Connection.peer)
+- `peer` is taken once right after accept and is the same for every request on that connection. If it cannot be taken, it is empty and all such connections share one window
+- Going over `max` within the window gives 429. `Retry-After` is the seconds left in the window (rounded up, at least 1)
+- Default `max` 60, `window` 60s
+- The counters are a map with a mutex, owned by the middleware. No globals
+- Keys whose window has passed are swept (the map does not grow without bound). Not on every request: the sweep runs on the first
+  request after one window has passed since the previous sweep, so expired keys stay until then

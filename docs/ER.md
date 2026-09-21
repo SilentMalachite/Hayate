@@ -1,23 +1,25 @@
-# ER — Hayate（エージェント向け）
+# ER — Hayate (for agents)
 
-正本は `docs/SPEC.md`。この図は **型と所有の関係** であり、RDB スキーマではない。
-表に無い実体を作らない。受け入れは Phase 1、Phase 2（CORS / 静的ファイル / レート制限）、Phase 3（TLS /
-JWT 検証 / OpenAPI 生成 / 最小 metrics / 静的ファイルのストリーミング送出）。multipart / WS / SSE / gzip は実装しない。
+English (canonical) | [日本語](ER.ja.md)
 
-寿命の略: `App` = プロセス、`Conn` = TCP 接続、`Req` = 1 リクエスト。
-view は所有しない。所有者より長く持たない。
+The canonical source is `docs/SPEC.md`. This diagram shows **types and their ownership**; it is not an RDB schema.
+Do not create entities that are not in the tables. Accepted: Phase 1, Phase 2 (CORS / static files / rate limiting), Phase 3 (TLS /
+JWT verification / OpenAPI generation / minimal metrics / streaming of static files). Multipart / WS / SSE / gzip are not implemented.
 
-## 実体の種類
+Lifetime abbreviations: `App` = process, `Conn` = TCP connection, `Req` = one request.
+Views do not own. Never keep one longer than its owner.
 
-| 種類 | 実体 |
+## Kinds of entity
+
+| Kind | Entities |
 |---|---|
-| 公開の型（`include/hayate/`） | APP, ROUTER, LIMITS, TLS, REQUEST, RESPONSE, FILE_SOURCE, RESULT, ERROR, HTTP_METHOD, JWT, CLAIMS, CORS, RATE_LIMIT, OPEN_API_INFO |
-| 公開の別名（`std::function`） | HANDLER, MIDDLEWARE |
-| 内部の型（`src/`） | ROUTE, SEGMENT, CONNECTION, CONNECTION_SET, COUNTERS, OPEN_FILE, RATE_TABLE（`mw::detail`、MW が所有） |
-| Asio / OpenSSL の型 | IO_CONTEXT, SSL_CONTEXT, WORKER_POOL（`asio::thread_pool`） |
-| 型は無い（持ち方を図にしただけ） | LISTENER（acceptor と accept ループ）、HEADER、QUERY_PAIR、PATH_PARAM、BODY、EXTENSION、STATUS |
+| Public types (`include/hayate/`) | APP, ROUTER, LIMITS, TLS, REQUEST, RESPONSE, FILE_SOURCE, RESULT, ERROR, HTTP_METHOD, JWT, CLAIMS, CORS, RATE_LIMIT, OPEN_API_INFO |
+| Public aliases (`std::function`) | HANDLER, MIDDLEWARE |
+| Internal types (`src/`) | ROUTE, SEGMENT, CONNECTION, CONNECTION_SET, COUNTERS, OPEN_FILE, RATE_TABLE (`mw::detail`, owned by the middleware) |
+| Asio / OpenSSL types | IO_CONTEXT, SSL_CONTEXT, WORKER_POOL (`asio::thread_pool`) |
+| No type (only how things are held) | LISTENER (acceptor and accept loop), HEADER, QUERY_PAIR, PATH_PARAM, BODY, EXTENSION, STATUS |
 
-## 図
+## Diagram
 
 ```mermaid
 erDiagram
@@ -203,37 +205,37 @@ erDiagram
     }
 ```
 
-## 関係（エージェントが守ること）
+## Relations (what agents must keep)
 
-| 左 | 多重度 | 右 | 所有 / 寿命 | 備考 |
+| Left | Multiplicity | Right | Ownership / lifetime | Notes |
 |---|---|---|---|---|
-| App | 1—1 | Router | App が所有 | 神オブジェクトを増やさない。根は App |
-| App | 1—0..1 | Listener | App が所有 | `bind` で作る。型ではなく App の acceptor と、admin strand 上の accept ループ |
-| App | 1—1 | IoContext | App が所有 | 1 つだけ。`threads(n)` は同じ io_context を n スレッドで回す |
-| App | 1—1 | Limits | App が所有 | 常にある。既定値は SPEC |
-| App | 1—0..1 | SslContext | App が所有 | `tls()` が `Tls` を読んで組む。`Tls` 自体は持たない |
-| App | 1—1 | Counters / ConnectionSet | App が所有 | metrics と、`stop()` が要求待ちの接続を取り消すための登録簿 |
-| Router | 1—* | Route | Router が所有 | GET / POST だけ。同じ形の二重登録と不正なパターンは登録時に投げる |
-| Router | 1—* | Middleware | Router が所有 | onion。入り登録順、戻り逆順。App の `use` は 404/405 も包む。`group` の分はマッチした Route だけ |
-| Route | 1—* | Segment | Route が所有 | `group()` は子の Router を持たず、連結したパターン（`//` を畳む）でルートを親に足す |
-| Route | 1—1 | Handler | Route が値で所有 | `awaitable<Response>(Request&)`。const で呼べること。同期は内部で包む |
-| Listener | 1—* | Connection | Listener が生成、Conn が自己寿命 | 上限超過は accept してすぐ閉じる。接続ごとに strand 1 本 |
-| Connection | 1—* | Request | Conn が作る、Req 寿命 | keep-alive で連続。`peer` は accept 時に 1 回取る remote IP の写し |
-| Request | 1—* | Header / Query / PathParam / Body | Request が所有 | アクセサは view を返す。欠けたものは空 view。`param` / `query` は復号済み、`path` は生 |
-| Request | 0—* | Extension | Req 寿命の型付きスロット | グローバル状態の代替。同じ型の `set` は上書きし、前の参照は無効 |
-| Handler | 1—1 | Response | 値で返す | 工場は `text` / `json` / `no_content` / `from_error` / `file`。`set_header` は名前を token 検査し値の CTL を落とす |
-| Response | 0—1 | FileSource | Response が所有 | 本文は bytes か FileSource のどちらか。FileSource を作るのは `files()` だけ |
-| FileSource | *—1 | WorkerPool | 共有 | `files()` のクロージャと FileSource が共有する。App より長く持たない |
-| Middleware | 0—1 | Response | next を呼ばなければ短絡 | |
-| Result | 0—1 | Error | 値 | `std::variant` の 1 実装。`std::expected` 禁止 |
-| Error | 1—1 | Status | 値 | ハンドラ境界で例外を漏らさない |
+| App | 1—1 | Router | owned by App | Do not add god objects. The root is App |
+| App | 1—0..1 | Listener | owned by App | Made by `bind`. Not a type: the App's acceptor and the accept loop on the admin strand |
+| App | 1—1 | IoContext | owned by App | Exactly one. `threads(n)` runs the same io_context on n threads |
+| App | 1—1 | Limits | owned by App | Always present. Defaults are in the SPEC |
+| App | 1—0..1 | SslContext | owned by App | `tls()` reads `Tls` and builds it. `Tls` itself is not kept |
+| App | 1—1 | Counters / ConnectionSet | owned by App | For metrics, and the registry `stop()` uses to cancel connections waiting for a request |
+| Router | 1—* | Route | owned by Router | GET / POST only. Duplicate shapes and malformed patterns throw at registration |
+| Router | 1—* | Middleware | owned by Router | Onion: in registration order on the way in, reverse on the way out. App `use` also wraps 404/405. `group` ones apply only to matched Routes |
+| Route | 1—* | Segment | owned by Route | `group()` keeps no child Router; it adds routes to the parent with the joined pattern (`//` collapsed) |
+| Route | 1—1 | Handler | owned by value by Route | `awaitable<Response>(Request&)`. Must be const-callable. Sync ones are wrapped internally |
+| Listener | 1—* | Connection | created by Listener, Conn owns itself | Over the limit: accepted and closed at once. One strand per connection |
+| Connection | 1—* | Request | created by Conn, Req lifetime | Consecutive with keep-alive. `peer` is a copy of the remote IP taken once at accept |
+| Request | 1—* | Header / Query / PathParam / Body | owned by Request | Accessors return views. Missing ones are empty views. `param` / `query` are decoded, `path` is raw |
+| Request | 0—* | Extension | typed slot with Req lifetime | Replaces global state. `set` of the same type overwrites and invalidates earlier references |
+| Handler | 1—1 | Response | returned by value | Factories are `text` / `json` / `no_content` / `from_error` / `file`. `set_header` token-checks the name and strips CTLs from the value |
+| Response | 0—1 | FileSource | owned by Response | The body is either bytes or a FileSource. Only `files()` creates a FileSource |
+| FileSource | *—1 | WorkerPool | shared | Shared by the `files()` closure and FileSources. Never kept longer than the App |
+| Middleware | 0—1 | Response | short-circuits when next is not called | |
+| Result | 0—1 | Error | value | A single `std::variant` implementation. `std::expected` is banned |
+| Error | 1—1 | Status | value | Exceptions never leak across the handler boundary |
 
-一致の規則（優先順位・空セグメント・二重登録）は SPEC の「ルーティング」節に 1 箇所。
-パス無し 404。メソッド違い 405 + Allow。
+The matching rules (priority, empty segments, duplicates) live in one place: the "Routing" section of the SPEC.
+No matching path is 404. A wrong method is 405 + Allow.
 
-## リクエスト経路（同じ実体）
+## Request path (same entities)
 
-詳しい順序（TLS・100-continue・HEAD・ファイル送出）は `docs/UML.md` のシーケンス。
+The detailed order (TLS, 100-continue, HEAD, file sending) is in the sequence in `docs/UML.md`.
 
 ```mermaid
 sequenceDiagram
@@ -267,27 +269,27 @@ sequenceDiagram
     end
 ```
 
-## Phase 2 / 3 で受け入れた機能（実体は上の図にある）
+## Features accepted in Phase 2 / 3 (their entities are in the diagram above)
 
-| Phase | 機能 | 形 | ぶら下がる先 |
+| Phase | Feature | Shape | Hangs off |
 |---|---|---|---|
-| 2 | CORS | `mw::cors(Cors)` | Middleware。preflight は 204 で短絡。固定 origin なら `Vary: Origin`。`mw::cors` が無ければ OPTIONS は 404 / 405 |
-| 2 | 静的ファイル | `files(root, max_bytes = 0, io_threads = 2, fs_timeout = 5s)` | Handler。root 外・上限超過・不在・通常ファイル以外は 404。FS 待ちが `fs_timeout` を超えたら 503。FS 呼び出しは `files()` のワーカープール |
-| 2 | レート制限 | `mw::rate_limit(RateLimit)` | Middleware。固定窓、`Request::peer` キー。`RateTable` は MW が mutex と一緒に持つ |
-| 3 | TLS | `Tls{cert_file, key_file, key_password}` | App が `ssl::context` を組む。読めない・鍵が証明書と合わないと `tls()` が投げる。最低 TLS 1.2。設定したら全接続が TLS |
-| 3 | JWT 検証 | `mw::jwt(Jwt)` | Middleware。HS256 のみ。`secret` が空・`leeway` が負なら投げる。正準でない base64url は 401。通れば `Claims` を Extension に置く |
-| 3 | metrics | `metrics(App&)` | Handler。`Counters` は App が 1 つ持つ |
-| 3 | OpenAPI | `openapi(const App&, OpenApiInfo = {})` | 関数。pattern と method だけから `Json` を作る。スキーマは出さない |
-| 3 | ストリーミング送出 | `Response::file(FileSource)` | Connection が 64 KiB ずつ送る。`Content-Length` は stat の size |
+| 2 | CORS | `mw::cors(Cors)` | Middleware. A preflight short-circuits with 204. `Vary: Origin` with a fixed origin. Without `mw::cors`, OPTIONS is 404 / 405 |
+| 2 | Static files | `files(root, max_bytes = 0, io_threads = 2, fs_timeout = 5s)` | Handler. Outside root, over the limit, missing, or not a regular file is 404. Filesystem waits over `fs_timeout` are 503. Filesystem calls run on the `files()` worker pool |
+| 2 | Rate limiting | `mw::rate_limit(RateLimit)` | Middleware. Fixed window keyed by `Request::peer`. The middleware holds `RateTable` together with a mutex |
+| 3 | TLS | `Tls{cert_file, key_file, key_password}` | The App builds the `ssl::context`. `tls()` throws when a file is unreadable or the key does not match the certificate. TLS 1.2 minimum. Once set, every connection is TLS |
+| 3 | JWT verification | `mw::jwt(Jwt)` | Middleware. HS256 only. Throws on an empty `secret` or a negative `leeway`. Non-canonical base64url is 401. On success puts `Claims` in an Extension |
+| 3 | metrics | `metrics(App&)` | Handler. The App owns one `Counters` |
+| 3 | OpenAPI | `openapi(const App&, OpenApiInfo = {})` | Function. Builds `Json` from pattern and method only. No schemas |
+| 3 | Streaming | `Response::file(FileSource)` | The Connection sends 64 KiB at a time. `Content-Length` is the stat'ed size |
 
-`StaticFile` / `TlsContext` / `JwtAuth` / `OpenApi` / `Metrics` のようなクラスは作らない。
+No classes like `StaticFile` / `TlsContext` / `JwtAuth` / `OpenApi` / `Metrics`.
 
-## 実装しない（SPEC の範囲外）
+## Not implemented (outside the SPEC)
 
-| Phase | 実体 | 理由 |
+| Phase | Entity | Reason |
 |---|---|---|
-| 2 | Multipart / UrlEncoded | SPEC で実装しないと決めた |
-| 2 | WebSocket / Sse | 同上 |
-| 2 | Gzip | 同上 |
+| 2 | Multipart / UrlEncoded | The SPEC decided not to implement it |
+| 2 | WebSocket / Sse | Same |
+| 2 | Gzip | Same |
 
-User / Session / ORM / Template は SPEC の範囲外。図に出さない。
+User / Session / ORM / Template are outside the SPEC. They do not appear in the diagrams.
