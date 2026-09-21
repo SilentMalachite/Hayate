@@ -10,6 +10,8 @@
 
 #include <chrono>
 #include <cstdint>
+#include <limits>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -52,6 +54,34 @@ bool same_signature(std::string_view a, std::string_view b) {
     return a.size() == b.size() && CRYPTO_memcmp(a.data(), b.data(), a.size()) == 0;
 }
 
+// exp / nbf は int64 秒の整数だけ受ける。小数・範囲外・非数値は不正なトークン扱い。
+std::optional<std::int64_t> numeric_date(const Json &v) {
+    if (v.is_number_unsigned()) {
+        const auto u = v.get<std::uint64_t>();
+        if (u > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())) {
+            return std::nullopt;
+        }
+        return static_cast<std::int64_t>(u);
+    }
+    if (v.is_number_integer()) {
+        return v.get<std::int64_t>();
+    }
+    return std::nullopt;
+}
+
+// leeway を足しても溢れない。
+constexpr std::int64_t sat_add(std::int64_t a, std::int64_t b) noexcept {
+    constexpr auto max = std::numeric_limits<std::int64_t>::max();
+    constexpr auto min = std::numeric_limits<std::int64_t>::min();
+    if (b > 0 && a > max - b) {
+        return max;
+    }
+    if (b < 0 && a < min - b) {
+        return min;
+    }
+    return a + b;
+}
+
 bool audience_ok(const Json &payload, const std::string &want) {
     if (want.empty()) {
         return true;
@@ -79,6 +109,10 @@ Middleware jwt(Jwt cfg) {
     // 空の secret は「全部通る」と同じ。設定時に落とす。
     if (cfg.secret.empty()) {
         throw std::invalid_argument("hayate::mw::jwt: secret must not be empty");
+    }
+    // 負の leeway は期限を前倒しするだけで、用途が無い。
+    if (cfg.leeway.count() < 0) {
+        throw std::invalid_argument("hayate::mw::jwt: leeway must not be negative");
     }
     return [cfg = std::move(cfg)](Request &req, Next next) -> boost::asio::awaitable<Response> {
         const auto token = bearer(req.header("authorization"));
@@ -116,7 +150,8 @@ Middleware jwt(Jwt cfg) {
         signing.append(header_b64);
         signing.push_back('.');
         signing.append(payload_b64);
-        if (!same_signature(detail::hmac_sha256(cfg.secret, signing), *signature)) {
+        const auto mac = detail::hmac_sha256(cfg.secret, signing);
+        if (!mac || !same_signature(*mac, *signature)) {
             co_return unauthorized();
         }
 
@@ -128,13 +163,19 @@ Middleware jwt(Jwt cfg) {
         const auto leeway = static_cast<std::int64_t>(cfg.leeway.count());
         // exp 無しは永久トークンになる。RFC 上は任意だが締める。
         const auto exp = payload.find("exp");
-        if (exp == payload.end() || !exp->is_number() || now > exp->get<std::int64_t>() + leeway) {
+        if (exp == payload.end()) {
+            co_return unauthorized();
+        }
+        const auto exp_at = numeric_date(*exp);
+        if (!exp_at || now > sat_add(*exp_at, leeway)) {
             co_return unauthorized();
         }
         const auto nbf = payload.find("nbf");
-        if (nbf != payload.end() &&
-            (!nbf->is_number() || now + leeway < nbf->get<std::int64_t>())) {
-            co_return unauthorized();
+        if (nbf != payload.end()) {
+            const auto nbf_at = numeric_date(*nbf);
+            if (!nbf_at || sat_add(now, leeway) < *nbf_at) {
+                co_return unauthorized();
+            }
         }
         if (!cfg.issuer.empty() && payload.value("iss", std::string{}) != cfg.issuer) {
             co_return unauthorized();

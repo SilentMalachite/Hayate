@@ -6,7 +6,11 @@
 
 #include <gtest/gtest.h>
 
+#include <chrono>
+#include <cstdint>
+#include <limits>
 #include <string>
+#include <string_view>
 
 namespace http = boost::beast::http;
 using hayate::Json;
@@ -24,6 +28,18 @@ void protect(hayate::App &app, hayate::mw::Jwt cfg) {
         auto *c = req.get<hayate::Claims>();
         return hayate::Response::text(c == nullptr ? "" : c->json.value("sub", ""));
     });
+}
+
+std::string to_hex(std::string_view raw) {
+    static constexpr std::string_view digits = "0123456789abcdef";
+    std::string out;
+    out.reserve(raw.size() * 2);
+    for (char c : raw) {
+        const auto b = static_cast<unsigned char>(c);
+        out += digits[b >> 4];
+        out += digits[b & 0x0f];
+    }
+    return out;
 }
 
 HttpCall call(std::uint16_t port, const std::string &token, std::vector<std::string> want = {}) {
@@ -62,9 +78,13 @@ TEST(Jwt, MalformedTokenIs401) {
 
 TEST(Jwt, TamperedSignatureIs401) {
     TestServer srv([](hayate::App &app) { protect(app, base_cfg()); });
-    auto tok = make_token(hs256_header(), Json::object({{"sub", "alice"}, {"exp", now_s() + 300}}),
-                          kSecret);
-    tok.back() = tok.back() == 'A' ? 'B' : 'A';
+    const auto header_b64 = base64url_encode(hs256_header().dump());
+    const auto payload_b64 =
+        base64url_encode(Json::object({{"sub", "alice"}, {"exp", now_s() + 300}}).dump());
+    // base64url の末尾文字は未使用ビットを含む。復号後のバイトを変える。
+    auto sig = hayate::detail::hmac_sha256(kSecret, header_b64 + "." + payload_b64).value();
+    sig[0] = static_cast<char>(sig[0] ^ 0x01);
+    const auto tok = header_b64 + "." + payload_b64 + "." + base64url_encode(sig);
     EXPECT_EQ(call(srv.port(), tok).status, 401);
 }
 
@@ -109,6 +129,71 @@ TEST(Jwt, FutureNbfIs401) {
         hs256_header(),
         Json::object({{"sub", "alice"}, {"exp", now_s() + 300}, {"nbf", now_s() + 300}}), kSecret);
     EXPECT_EQ(call(srv.port(), tok).status, 401);
+}
+
+// nbf が int64 を超えると負値に化けて「過去」になり、未来の nbf が通っていた。
+TEST(Jwt, NbfBeyondInt64Is401) {
+    TestServer srv([](hayate::App &app) { protect(app, base_cfg()); });
+    const auto tok = make_token(hs256_header(),
+                                Json::object({{"sub", "alice"},
+                                              {"exp", now_s() + 300},
+                                              {"nbf", std::numeric_limits<std::uint64_t>::max()}}),
+                                kSecret);
+    EXPECT_EQ(call(srv.port(), tok).status, 401);
+}
+
+// exp + leeway が溢れると、期限切れでないトークンを 401 にしていた。
+TEST(Jwt, ExpAtInt64MaxIsNotExpired) {
+    TestServer srv([](hayate::App &app) {
+        auto cfg = base_cfg();
+        cfg.leeway = std::chrono::seconds(60);
+        protect(app, cfg);
+    });
+    const auto tok = make_token(
+        hs256_header(),
+        Json::object({{"sub", "alice"}, {"exp", std::numeric_limits<std::int64_t>::max()}}),
+        kSecret);
+    auto r = call(srv.port(), tok);
+    EXPECT_EQ(r.status, 200);
+    EXPECT_EQ(r.body, "alice");
+}
+
+TEST(Jwt, FractionalExpIs401) {
+    TestServer srv([](hayate::App &app) { protect(app, base_cfg()); });
+    const auto tok = make_token(
+        hs256_header(),
+        Json::object({{"sub", "alice"}, {"exp", static_cast<double>(now_s() + 300) + 0.5}}),
+        kSecret);
+    EXPECT_EQ(call(srv.port(), tok).status, 401);
+}
+
+TEST(Jwt, HugeFloatExpIs401) {
+    TestServer srv([](hayate::App &app) { protect(app, base_cfg()); });
+    const auto tok =
+        make_token(hs256_header(), Json::object({{"sub", "alice"}, {"exp", 1e100}}), kSecret);
+    EXPECT_EQ(call(srv.port(), tok).status, 401);
+}
+
+TEST(Jwt, NegativeLeewayThrows) {
+    EXPECT_THROW(hayate::mw::jwt({.secret = kSecret, .leeway = std::chrono::seconds(-1)}),
+                 std::exception);
+}
+
+// HMAC が失敗して空を返したとき、空署名と一致してはいけない。
+TEST(Jwt, EmptySignatureIs401) {
+    TestServer srv([](hayate::App &app) { protect(app, base_cfg()); });
+    const auto payload = Json::object({{"sub", "root"}, {"exp", now_s() + 300}});
+    const auto tok =
+        base64url_encode(hs256_header().dump()) + "." + base64url_encode(payload.dump()) + ".";
+    EXPECT_EQ(call(srv.port(), tok).status, 401);
+}
+
+// テスト側の署名も同じ関数を使う。既知ベクタが無いと両方同時に壊れても気づけない。
+TEST(Hmac, Sha256MatchesRfc4231Vector) {
+    const auto mac = hayate::detail::hmac_sha256("Jefe", "what do ya want for nothing?");
+    ASSERT_TRUE(mac.has_value());
+    EXPECT_EQ(mac->size(), 32u);
+    EXPECT_EQ(to_hex(*mac), "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843");
 }
 
 TEST(Jwt, AlgNoneIs401) {
