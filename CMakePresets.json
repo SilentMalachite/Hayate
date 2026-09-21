@@ -29,17 +29,32 @@
       "name": "test",
       "inherits": "debug",
       "binaryDir": "${sourceDir}/build/test"
+    },
+    {
+      "name": "tsan",
+      "inherits": "debug",
+      "binaryDir": "${sourceDir}/build/tsan",
+      "cacheVariables": {
+        "HAYATE_ENABLE_SANITIZERS": "OFF",
+        "HAYATE_SANITIZE_THREAD": "ON"
+      }
     }
   ],
   "buildPresets": [
     {"name": "debug", "configurePreset": "debug"},
     {"name": "release", "configurePreset": "release"},
-    {"name": "test", "configurePreset": "test"}
+    {"name": "test", "configurePreset": "test"},
+    {"name": "tsan", "configurePreset": "tsan"}
   ],
   "testPresets": [
     {
       "name": "test",
       "configurePreset": "test",
+      "output": {"outputOnFailure": true}
+    },
+    {
+      "name": "tsan",
+      "configurePreset": "tsan",
       "output": {"outputOnFailure": true}
     }
   ]

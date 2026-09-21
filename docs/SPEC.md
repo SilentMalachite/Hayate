@@ -130,6 +130,7 @@ Phase 3（metrics）
 - 依存: Boost と OpenSSL は `find_package`。nlohmann/json と GoogleTest は FetchContent。vcpkg は使わない
 - 所有: 入力は `string_view` / `span<const byte>`。寿命は Request。足りるならコピーしない
 - スレッド: io_context あたり 1。`app.threads(n)` で複数。共有可変は strand か mutex を書いてから
+- 並行の単位は接続。1 接続 1 strand で直列、異なる接続は並行に走る
 - 禁止: `new`/`delete`/`malloc`、生配列、ハンドラ境界をまたぐ例外、共有可変グローバル
 - 作業順: この SPEC → 公開ヘッダ → 失敗するテスト → 最小実装 → 全テスト → 停止
 - 正本は `docs/SPEC.md`。ER が参照する ARCHITECTURE は本 SPEC の『ルーティング』節。
@@ -199,7 +200,13 @@ App の `use()` は 404/405 を含む dispatch 全体を包む（CORS preflight 
 - App が `io_context` と `Router` と `Limits` と acceptor を所有する
 - `bind(host, port)` は socket bind + listen まで同期。`port()==0` ならエフェメラル
 - `port()` は bind 後の実ポート
-- `run()` は accept ループ。`asio::awaitable<void>`。`stop()` で終わる
+- `run()` は accept ループ。`asio::awaitable<void>`。`stop()` で終わる。
+  acceptor は App の `io_context` に束縛されているので、`run()` もその `io_context` 上で spawn する。
+  外部の executor では動かない
+- accept した接続ごとに strand を 1 本作る。その接続の socket・stream・タイマー・coroutine は
+  すべてその strand 上で動く（`threads(n)` で n>1 のとき Beast の stream が要求する条件）
+- accept ループと `stop()` は管理用 strand 1 本で直列化する。`stop()` はどのスレッドから
+  何度呼んでもよく、効果は 1 回分
 - `serve()` は `threads(n)`（既定 1）で io_context を blocking 実行する。SIGINT/SIGTERM で `stop()`
 - `stop()` は新規 accept を止め、in-flight の読書きを完了させてから io_context を止める
 

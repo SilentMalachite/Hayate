@@ -33,6 +33,8 @@ void release_one(std::atomic<std::uint32_t> &n) {
 
 struct App::Impl {
     net::io_context ioc;
+    // accept ループと stop() をここで直列化する。多重 stop と SIGTERM が重ならない。
+    net::strand<net::io_context::executor_type> admin{net::make_strand(ioc)};
     // acceptor より後に壊れ、ioc より先に壊れる位置に置く。
     std::unique_ptr<ssl::context> ssl_ctx;
     std::unique_ptr<tcp::acceptor> acceptor;
@@ -102,7 +104,10 @@ boost::asio::awaitable<void> App::run() {
     impl_->accepting = true;
     impl_->shutting = false;
     while (impl_->accepting.load()) {
-        auto [ec, sock] = co_await impl_->acceptor->async_accept(net::as_tuple);
+        // 接続ごとに strand を 1 本。socket をそれに束縛して accept するので、
+        // stream の読み書きも内部タイマーも同じ strand 上で直列に走る。
+        net::any_io_executor conn_ex(net::make_strand(impl_->ioc));
+        auto [ec, sock] = co_await impl_->acceptor->async_accept(conn_ex, net::as_tuple);
         if (ec) {
             break;
         }
@@ -119,13 +124,13 @@ boost::asio::awaitable<void> App::run() {
         beast::tcp_stream stream(std::move(sock));
         auto done = [impl = impl_.get()] { release_one(impl->connections); };
         if (impl_->ssl_ctx) {
-            net::co_spawn(impl_->ioc,
+            net::co_spawn(conn_ex,
                           serve_connection(detail::tls_stream{std::move(stream), *impl_->ssl_ctx},
                                            impl_->limits, impl_->router, impl_->counters,
                                            impl_->shutting, std::move(done)),
                           net::detached);
         } else {
-            net::co_spawn(impl_->ioc,
+            net::co_spawn(conn_ex,
                           serve_connection(std::move(stream), impl_->limits, impl_->router,
                                            impl_->counters, impl_->shutting, std::move(done)),
                           net::detached);
@@ -138,13 +143,14 @@ void App::serve() {
     impl_->ioc.restart();
     impl_->work = std::make_unique<net::executor_work_guard<net::io_context::executor_type>>(
         net::make_work_guard(impl_->ioc));
-    impl_->signals = std::make_unique<net::signal_set>(impl_->ioc, SIGINT, SIGTERM);
+    // signal ハンドラと accept ループを admin strand に載せ、stop() と直列化する。
+    impl_->signals = std::make_unique<net::signal_set>(impl_->admin, SIGINT, SIGTERM);
     impl_->signals->async_wait([this](const boost::system::error_code &ec, int) {
         if (!ec) {
             stop();
         }
     });
-    net::co_spawn(impl_->ioc, run(), net::detached);
+    net::co_spawn(impl_->admin, run(), net::detached);
     std::vector<std::thread> extras;
     extras.reserve(impl_->threads > 0 ? impl_->threads - 1 : 0);
     for (std::uint32_t i = 1; i < impl_->threads; ++i) {
@@ -160,7 +166,8 @@ void App::stop() {
     if (!impl_) {
         return;
     }
-    net::post(impl_->ioc, [impl = impl_.get()] {
+    // admin strand なので、多重呼び出しも accept ループも直列になる。
+    net::post(impl_->admin, [impl = impl_.get()] {
         impl->shutting = true;
         impl->accepting = false;
         boost::system::error_code ec;

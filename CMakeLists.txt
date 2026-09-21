@@ -6,6 +6,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 option(HAYATE_ENABLE_SANITIZERS "ASan+UBSan" OFF)
+option(HAYATE_SANITIZE_THREAD "TSan (ASan とは同居できない)" OFF)
 option(HAYATE_BUILD_TESTS "Build tests" OFF)
 option(HAYATE_BUILD_EXAMPLES "Build examples" OFF)
 
@@ -59,7 +60,11 @@ target_link_libraries(hayate PUBLIC
 )
 target_compile_features(hayate PUBLIC cxx_std_20)
 
-if(HAYATE_ENABLE_SANITIZERS)
+# ASan と TSan は同居できない。競合検出は専用 preset で回す。
+if(HAYATE_SANITIZE_THREAD)
+    target_compile_options(hayate PUBLIC -fsanitize=thread -fno-omit-frame-pointer)
+    target_link_options(hayate PUBLIC -fsanitize=thread)
+elseif(HAYATE_ENABLE_SANITIZERS)
     target_compile_options(hayate PUBLIC -fsanitize=address,undefined -fno-omit-frame-pointer)
     target_link_options(hayate PUBLIC -fsanitize=address,undefined)
 endif()
@@ -93,6 +98,7 @@ if(HAYATE_BUILD_TESTS)
         tests/test_metrics.cpp
         tests/test_jwt.cpp
         tests/test_openapi.cpp
+        tests/test_concurrency.cpp
     )
     target_include_directories(hayate_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
     target_link_libraries(hayate_tests PRIVATE hayate GTest::gtest_main)
