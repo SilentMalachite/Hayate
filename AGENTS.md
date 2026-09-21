@@ -4,6 +4,7 @@ Sol で **Hayate** を扱うときの指示。
 Claude Code 用の `CLAUDE.md` より短いのは意図的。写しにしない。規約を変えるときは両方を直す。
 
 正本: `docs/SPEC.md`。図: `docs/ER.md` / `docs/UML.md`。
+文書は英語が正本、`*.ja.md` は訳。英語を先に直し、同じコミットで訳も直す。
 コード探索は Serena（`.serena/`）。構造・関係は Graphify（`graphify-out/`）。grep の前に両方。
 
 ## 相手
