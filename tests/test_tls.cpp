@@ -121,11 +121,12 @@ boost::system::error_code connect_and_handshake(net::io_context &ioc, TlsStream 
         auto &tcp = beast::get_lowest_layer(s);
         tcp.expires_after(std::chrono::seconds(5));
         const net::ip::tcp::endpoint ep(net::ip::make_address("127.0.0.1"), port);
-        auto [cec] = co_await tcp.async_connect(ep, net::as_tuple);
+        auto [cec] = co_await tcp.async_connect(ep, net::as_tuple(net::use_awaitable));
         if (cec) {
             co_return cec;
         }
-        auto [hec] = co_await s.async_handshake(net::ssl::stream_base::client, net::as_tuple);
+        auto [hec] = co_await s.async_handshake(net::ssl::stream_base::client,
+                                                net::as_tuple(net::use_awaitable));
         co_return hec;
     });
 }
@@ -167,7 +168,8 @@ TEST(Tls, HandshakeTimeoutCloses) {
     std::array<char, 16> sink{};
     const auto ec =
         c.run(std::chrono::seconds(5), [&]() -> net::awaitable<boost::system::error_code> {
-            auto [rec, n] = co_await c.stream().async_read_some(net::buffer(sink), net::as_tuple);
+            auto [rec, n] = co_await c.stream().async_read_some(net::buffer(sink),
+                                                                net::as_tuple(net::use_awaitable));
             (void)n;
             co_return rec;
         });
@@ -194,12 +196,12 @@ TEST(Tls, ShutdownTimeoutCloses) {
     beast::flat_buffer buf;
     ec = run_async(ioc, [&]() -> net::awaitable<boost::system::error_code> {
         beast::get_lowest_layer(s).expires_after(std::chrono::seconds(5));
-        auto [wec, wn] = co_await http::async_write(s, req, net::as_tuple);
+        auto [wec, wn] = co_await http::async_write(s, req, net::as_tuple(net::use_awaitable));
         (void)wn;
         if (wec) {
             co_return wec;
         }
-        auto [rec, rn] = co_await http::async_read(s, buf, res, net::as_tuple);
+        auto [rec, rn] = co_await http::async_read(s, buf, res, net::as_tuple(net::use_awaitable));
         (void)rn;
         co_return rec;
     });
@@ -211,7 +213,8 @@ TEST(Tls, ShutdownTimeoutCloses) {
         auto &tcp = beast::get_lowest_layer(s);
         tcp.expires_after(std::chrono::seconds(5));
         for (;;) {
-            auto [rec, n] = co_await tcp.async_read_some(net::buffer(sink), net::as_tuple);
+            auto [rec, n] =
+                co_await tcp.async_read_some(net::buffer(sink), net::as_tuple(net::use_awaitable));
             (void)n;
             if (rec) {
                 co_return rec;

@@ -55,7 +55,8 @@ template <typename Stream> class BasicConn {
 
     boost::system::error_code connect(std::chrono::milliseconds limit = std::chrono::seconds(2)) {
         return run(limit, [&]() -> boost::asio::awaitable<boost::system::error_code> {
-            auto [ec] = co_await lowest().async_connect(ep_, boost::asio::as_tuple);
+            auto [ec] = co_await lowest().async_connect(
+                ep_, boost::asio::as_tuple(boost::asio::use_awaitable));
             co_return ec;
         });
     }
@@ -64,8 +65,9 @@ template <typename Stream> class BasicConn {
         requires(!plain)
     {
         return run(limit, [&]() -> boost::asio::awaitable<boost::system::error_code> {
-            auto [ec] = co_await stream_.async_handshake(boost::asio::ssl::stream_base::client,
-                                                         boost::asio::as_tuple);
+            auto [ec] =
+                co_await stream_.async_handshake(boost::asio::ssl::stream_base::client,
+                                                 boost::asio::as_tuple(boost::asio::use_awaitable));
             co_return ec;
         });
     }
@@ -78,7 +80,8 @@ template <typename Stream> class BasicConn {
                                         std::chrono::milliseconds limit = std::chrono::seconds(2)) {
         return run(limit, [&]() -> boost::asio::awaitable<boost::system::error_code> {
             auto [ec, n] = co_await boost::asio::async_write(
-                stream_, boost::asio::buffer(bytes.data(), bytes.size()), boost::asio::as_tuple);
+                stream_, boost::asio::buffer(bytes.data(), bytes.size()),
+                boost::asio::as_tuple(boost::asio::use_awaitable));
             (void)n;
             co_return ec;
         });
@@ -89,8 +92,8 @@ template <typename Stream> class BasicConn {
     boost::system::error_code write(Msg &&m,
                                     std::chrono::milliseconds limit = std::chrono::seconds(2)) {
         return run(limit, [&]() -> boost::asio::awaitable<boost::system::error_code> {
-            auto [ec, n] =
-                co_await boost::beast::http::async_write(stream_, m, boost::asio::as_tuple);
+            auto [ec, n] = co_await boost::beast::http::async_write(
+                stream_, m, boost::asio::as_tuple(boost::asio::use_awaitable));
             (void)n;
             co_return ec;
         });
@@ -100,8 +103,8 @@ template <typename Stream> class BasicConn {
     boost::system::error_code
     write_header(Serializer &sr, std::chrono::milliseconds limit = std::chrono::seconds(2)) {
         return run(limit, [&]() -> boost::asio::awaitable<boost::system::error_code> {
-            auto [ec, n] =
-                co_await boost::beast::http::async_write_header(stream_, sr, boost::asio::as_tuple);
+            auto [ec, n] = co_await boost::beast::http::async_write_header(
+                stream_, sr, boost::asio::as_tuple(boost::asio::use_awaitable));
             (void)n;
             co_return ec;
         });
@@ -112,8 +115,8 @@ template <typename Stream> class BasicConn {
     boost::system::error_code read(Msg &m,
                                    std::chrono::milliseconds limit = std::chrono::seconds(2)) {
         return run(limit, [&]() -> boost::asio::awaitable<boost::system::error_code> {
-            auto [ec, n] =
-                co_await boost::beast::http::async_read(stream_, buf_, m, boost::asio::as_tuple);
+            auto [ec, n] = co_await boost::beast::http::async_read(
+                stream_, buf_, m, boost::asio::as_tuple(boost::asio::use_awaitable));
             (void)n;
             co_return ec;
         });

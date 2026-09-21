@@ -747,8 +747,8 @@ TEST(Static, StreamsBeforeFileEnds) {
     const auto ec =
         c.run(std::chrono::seconds(5), [&]() -> boost::asio::awaitable<boost::system::error_code> {
             while (!parser.is_done() && parser.get().body().empty()) {
-                auto [rec, n] =
-                    co_await http::async_read_some(c.stream(), buf, parser, boost::asio::as_tuple);
+                auto [rec, n] = co_await http::async_read_some(
+                    c.stream(), buf, parser, boost::asio::as_tuple(boost::asio::use_awaitable));
                 (void)n;
                 if (rec) {
                     co_return rec;
@@ -886,13 +886,13 @@ TEST(Static, PeerCloseDuringStreamCloses) {
         ASSERT_FALSE(c.write(req));
         // 送出が始まったことを見てから、読み残したまま閉じる（RST が飛ぶ）。
         std::array<char, 1024> first{};
-        const auto ec = c.run(std::chrono::seconds(2),
-                              [&]() -> boost::asio::awaitable<boost::system::error_code> {
-                                  auto [rec, n] = co_await c.stream().async_read_some(
-                                      boost::asio::buffer(first), boost::asio::as_tuple);
-                                  (void)n;
-                                  co_return rec;
-                              });
+        const auto ec = c.run(
+            std::chrono::seconds(2), [&]() -> boost::asio::awaitable<boost::system::error_code> {
+                auto [rec, n] = co_await c.stream().async_read_some(
+                    boost::asio::buffer(first), boost::asio::as_tuple(boost::asio::use_awaitable));
+                (void)n;
+                co_return rec;
+            });
         ASSERT_FALSE(ec) << ec.message();
     }
     // 閉じれば、開いている接続はスクレイプ自身の 1 本になる。時間ではなく状態を待つ。

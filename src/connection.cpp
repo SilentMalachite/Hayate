@@ -42,7 +42,8 @@ net::awaitable<bool> do_handshake(beast::tcp_stream &, std::chrono::milliseconds
 
 net::awaitable<bool> do_handshake(detail::tls_stream &s, std::chrono::milliseconds window) {
     s.next_layer().expires_after(window);
-    auto [ec] = co_await s.async_handshake(detail::ssl::stream_base::server, net::as_tuple);
+    auto [ec] = co_await s.async_handshake(detail::ssl::stream_base::server,
+                                           net::as_tuple(net::use_awaitable));
     co_return !ec;
 }
 
@@ -61,7 +62,7 @@ net::awaitable<void> shutdown_stream(detail::tls_stream &s, std::chrono::millise
     }
     // 返事を待つので窓が要る。切れていれば即エラーで戻る。
     s.next_layer().expires_after(window);
-    co_await s.async_shutdown(net::as_tuple);
+    co_await s.async_shutdown(net::as_tuple(net::use_awaitable));
     boost::system::error_code ignored;
     s.next_layer().socket().shutdown(tcp::socket::shutdown_send, ignored);
     co_return;
@@ -193,11 +194,12 @@ class Connection : public std::enable_shared_from_this<Connection<Stream>> {
                                                             bool head) {
         if (head) {
             http::response_serializer<http::string_body> sr{out};
-            auto [ec, n] = co_await http::async_write_header(stream_, sr, net::as_tuple);
+            auto [ec, n] =
+                co_await http::async_write_header(stream_, sr, net::as_tuple(net::use_awaitable));
             (void)n;
             co_return ec;
         }
-        auto [ec, n] = co_await http::async_write(stream_, out, net::as_tuple);
+        auto [ec, n] = co_await http::async_write(stream_, out, net::as_tuple(net::use_awaitable));
         (void)n;
         co_return ec;
     }
@@ -219,7 +221,8 @@ class Connection : public std::enable_shared_from_this<Connection<Stream>> {
         http::response_serializer<http::buffer_body> sr{out};
         if (head) {
             lowest(stream_).expires_after(limits_.write_timeout);
-            auto [hec, hn] = co_await http::async_write_header(stream_, sr, net::as_tuple);
+            auto [hec, hn] =
+                co_await http::async_write_header(stream_, sr, net::as_tuple(net::use_awaitable));
             (void)hn;
             co_return !hec;
         }
@@ -249,7 +252,8 @@ class Connection : public std::enable_shared_from_this<Connection<Stream>> {
             left -= n;
             out.body().more = left > 0;
             lowest(stream_).expires_after(limits_.write_timeout);
-            auto [wec, wbytes] = co_await http::async_write(stream_, sr, net::as_tuple);
+            auto [wec, wbytes] =
+                co_await http::async_write(stream_, sr, net::as_tuple(net::use_awaitable));
             (void)wbytes;
             if (wec && wec != http::error::need_buffer) {
                 co_return false;
@@ -307,8 +311,8 @@ class Connection : public std::enable_shared_from_this<Connection<Stream>> {
                 parser.body_limit(limits_.max_body_bytes);
                 // 要求はヘッダが揃うまで始まっていない。この間だけ stop() が取り消せる。
                 waiting_ = true;
-                auto [ec, bytes] =
-                    co_await http::async_read_header(stream_, buffer_, parser, net::as_tuple);
+                auto [ec, bytes] = co_await http::async_read_header(
+                    stream_, buffer_, parser, net::as_tuple(net::use_awaitable));
                 waiting_ = false;
                 (void)bytes;
                 if (!ec && !parser.is_done()) {
@@ -318,8 +322,8 @@ class Connection : public std::enable_shared_from_this<Connection<Stream>> {
                         http::response<http::empty_body> cont{http::status::continue_,
                                                               parser.get().version()};
                         lowest(stream_).expires_after(limits_.write_timeout);
-                        auto [cec, cbytes] =
-                            co_await http::async_write(stream_, cont, net::as_tuple);
+                        auto [cec, cbytes] = co_await http::async_write(
+                            stream_, cont, net::as_tuple(net::use_awaitable));
                         (void)cbytes;
                         if (cec) {
                             break;
@@ -327,8 +331,8 @@ class Connection : public std::enable_shared_from_this<Connection<Stream>> {
                     }
                     // ヘッダが来た後は本文の到着待ち。窓は idle ではなく read_timeout。
                     lowest(stream_).expires_after(limits_.read_timeout);
-                    auto [bec, bbytes] =
-                        co_await http::async_read(stream_, buffer_, parser, net::as_tuple);
+                    auto [bec, bbytes] = co_await http::async_read(
+                        stream_, buffer_, parser, net::as_tuple(net::use_awaitable));
                     (void)bbytes;
                     ec = bec;
                 }

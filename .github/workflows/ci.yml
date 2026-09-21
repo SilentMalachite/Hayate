@@ -1,0 +1,46 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      repeat:
+        description: ctest --repeat until-fail の回数
+        type: number
+        default: 1
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    # 約束している最低版（GCC 13 / Clang 16）と Boost 1.83 が apt で揃う。
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        cxx: [g++-13, clang++-16]
+        preset: [test, tsan]
+        include:
+          - cxx: g++-13
+            pkgs: g++-13
+          - cxx: clang++-16
+            pkgs: clang-16 libclang-rt-16-dev
+    env:
+      CXX: ${{ matrix.cxx }}
+      PRESET: ${{ matrix.preset }}
+      PKGS: ${{ matrix.pkgs }}
+      REPEAT: ${{ inputs.repeat || 1 }}
+    steps:
+      - uses: actions/checkout@v7
+      - run: sudo apt-get update && sudo apt-get install -y ninja-build libboost1.83-dev libssl-dev $PKGS
+      # 24.04 の mmap_rnd_bits=32 では、古い ASan / TSan の runtime が shadow を置けずに落ちる。
+      - run: sudo sysctl vm.mmap_rnd_bits=28
+      - run: cmake --preset "$PRESET" -DCMAKE_CXX_COMPILER="$CXX"
+      - run: cmake --build --preset "$PRESET"
+      - run: ctest --preset "$PRESET" --repeat "until-fail:$REPEAT"

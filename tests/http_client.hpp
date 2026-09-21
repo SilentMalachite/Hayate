@@ -63,18 +63,20 @@ inline HttpCall http_call(std::string host, std::uint16_t port, boost::beast::ht
             ioc,
             [&]() -> net::awaitable<void> {
                 stream.expires_after(timeout);
-                auto [cec] = co_await stream.async_connect(ep, net::as_tuple);
+                auto [cec] = co_await stream.async_connect(ep, net::as_tuple(net::use_awaitable));
                 if (cec) {
                     failed = cec;
                     co_return;
                 }
-                auto [wec, wn] = co_await http::async_write(stream, req, net::as_tuple);
+                auto [wec, wn] =
+                    co_await http::async_write(stream, req, net::as_tuple(net::use_awaitable));
                 (void)wn;
                 if (wec) {
                     failed = wec;
                     co_return;
                 }
-                auto [rec, rn] = co_await http::async_read(stream, buf, res, net::as_tuple);
+                auto [rec, rn] =
+                    co_await http::async_read(stream, buf, res, net::as_tuple(net::use_awaitable));
                 (void)rn;
                 failed = rec;
             },
