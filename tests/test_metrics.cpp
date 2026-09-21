@@ -5,8 +5,13 @@
 
 #include <gtest/gtest.h>
 
+#include <chrono>
 #include <cstdint>
+#include <future>
+#include <latch>
 #include <string>
+#include <thread>
+#include <vector>
 
 namespace http = boost::beast::http;
 
@@ -127,4 +132,69 @@ TEST(Metrics, OversizedHeaderCountsAs5xx) {
     auto r = http_call("127.0.0.1", srv.port(), http::verb::get, "/metrics");
     EXPECT_EQ(value_of(r.body, "hayate_responses_total{class=\"5xx\"}"), 1);
     EXPECT_EQ(value_of(r.body, "hayate_responses_total{class=\"2xx\"}"), 0);
+}
+
+// 上限超過の 413 / 431 は Router に届かないが、応答は返るので数える。
+TEST(Metrics, LimitErrorsAreCounted) {
+    TestServer srv([](hayate::App &app) {
+        // スクレイプの要求は通る大きさにする。
+        app.limits().max_header_bytes = 256;
+        app.limits().max_body_bytes = 4;
+        setup(app);
+        app.post("/echo", [](hayate::Request &) { return hayate::Response::text("echo"); });
+    });
+    auto big_header = http_call("127.0.0.1", srv.port(), http::verb::get, "/", {}, {},
+                                std::chrono::seconds(2), {{"X-Pad", std::string(1024, 'a')}});
+    EXPECT_EQ(big_header.status, 431);
+    auto big_body = http_call("127.0.0.1", srv.port(), http::verb::post, "/echo", "hello");
+    EXPECT_EQ(big_body.status, 413);
+    auto r = http_call("127.0.0.1", srv.port(), http::verb::get, "/metrics");
+    ASSERT_EQ(r.status, 200);
+    EXPECT_EQ(value_of(r.body, "hayate_requests_total"), 2);
+    EXPECT_EQ(value_of(r.body, "hayate_responses_total{class=\"4xx\"}"), 2);
+}
+
+// threads(4) で並行に数えても取りこぼさない。
+TEST(Metrics, ExactUnderConcurrency) {
+    TestServer srv([](hayate::App &app) {
+        app.threads(4);
+        setup(app);
+    });
+    constexpr int kClients = 8;
+    constexpr int kPerClient = 8;
+    std::latch start(kClients + 1);
+    std::vector<std::future<int>> oks;
+    std::vector<std::thread> threads;
+    oks.reserve(kClients);
+    threads.reserve(kClients);
+    for (int c = 0; c < kClients; ++c) {
+        std::promise<int> p;
+        oks.emplace_back(p.get_future());
+        threads.emplace_back([&srv, &start, p = std::move(p)]() mutable {
+            start.arrive_and_wait();
+            int ok = 0;
+            for (int i = 0; i < kPerClient; ++i) {
+                auto r = http_call("127.0.0.1", srv.port(), http::verb::get, "/", {}, {},
+                                   std::chrono::seconds(10));
+                ok += r.status == 200 ? 1 : 0;
+            }
+            p.set_value(ok);
+        });
+    }
+    start.arrive_and_wait();
+    int total = 0;
+    for (auto &f : oks) {
+        total += f.get();
+    }
+    for (auto &t : threads) {
+        t.join();
+    }
+    ASSERT_EQ(total, kClients * kPerClient);
+    auto r = http_call("127.0.0.1", srv.port(), http::verb::get, "/metrics");
+    ASSERT_EQ(r.status, 200);
+    EXPECT_EQ(value_of(r.body, "hayate_requests_total"), total);
+    EXPECT_EQ(value_of(r.body, "hayate_responses_total{class=\"2xx\"}"), total);
+    // スクレイプ自身の接続も accept 済み。connections_open は閉じる順が client の読みと
+    // 前後するので見ない。
+    EXPECT_EQ(value_of(r.body, "hayate_connections_accepted_total"), total + 1);
 }
