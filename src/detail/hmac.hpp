@@ -1,5 +1,6 @@
 #pragma once
 
+#include <openssl/crypto.h>
 #include <openssl/evp.h>
 #include <openssl/hmac.h>
 
@@ -23,6 +24,13 @@ inline std::optional<std::string> hmac_sha256(std::string_view key, std::string_
         return std::nullopt;
     }
     return std::string(reinterpret_cast<const char *>(buf.data()), len);
+}
+
+// 計算に失敗した mac はどの署名とも一致させない。空署名とも。
+// 早期 return で長さを漏らさないよう、長さ一致を先に見てから定数時間比較する。
+inline bool signature_matches(const std::optional<std::string> &mac, std::string_view sig) {
+    return mac && mac->size() == sig.size() &&
+           CRYPTO_memcmp(mac->data(), sig.data(), sig.size()) == 0;
 }
 
 } // namespace hayate::detail

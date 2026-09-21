@@ -6,8 +6,6 @@
 #include <hayate/request.hpp>
 #include <hayate/response.hpp>
 
-#include <openssl/crypto.h>
-
 #include <chrono>
 #include <cstdint>
 #include <limits>
@@ -47,11 +45,6 @@ std::string_view bearer(std::string_view value) {
         token.remove_prefix(1);
     }
     return token;
-}
-
-// 早期 return で長さを漏らさないよう、長さ一致を先に見てから定数時間比較する。
-bool same_signature(std::string_view a, std::string_view b) {
-    return a.size() == b.size() && CRYPTO_memcmp(a.data(), b.data(), a.size()) == 0;
 }
 
 // exp / nbf は int64 秒の整数だけ受ける。小数・範囲外・非数値は不正なトークン扱い。
@@ -156,8 +149,7 @@ Middleware jwt(Jwt cfg) {
         signing.append(header_b64);
         signing.push_back('.');
         signing.append(payload_b64);
-        const auto mac = detail::hmac_sha256(cfg.secret, signing);
-        if (!mac || !same_signature(*mac, *signature)) {
+        if (!detail::signature_matches(detail::hmac_sha256(cfg.secret, signing), *signature)) {
             co_return unauthorized();
         }
 

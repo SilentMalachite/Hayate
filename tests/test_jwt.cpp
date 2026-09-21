@@ -9,8 +9,10 @@
 #include <chrono>
 #include <cstdint>
 #include <limits>
+#include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace http = boost::beast::http;
 using hayate::Json;
@@ -299,4 +301,18 @@ TEST(Jwt, ScopedToGroup) {
     EXPECT_EQ(open.body, "up");
     auto guarded = http_call("127.0.0.1", srv.port(), http::verb::get, "/api/me");
     EXPECT_EQ(guarded.status, 401);
+}
+
+// HMAC が失敗したら、どんな署名とも一致しない。空署名とも。
+TEST(Hmac, MissingMacNeverMatches) {
+    using hayate::detail::signature_matches;
+    const auto mac = hayate::detail::hmac_sha256("key", "data");
+    ASSERT_TRUE(mac.has_value());
+    EXPECT_TRUE(signature_matches(mac, *mac));
+    auto flipped = *mac;
+    flipped[0] = static_cast<char>(flipped[0] ^ 0x01);
+    EXPECT_FALSE(signature_matches(mac, flipped));
+    EXPECT_FALSE(signature_matches(mac, ""));
+    EXPECT_FALSE(signature_matches(std::nullopt, ""));
+    EXPECT_FALSE(signature_matches(std::nullopt, *mac));
 }
