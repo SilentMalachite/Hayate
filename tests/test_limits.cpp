@@ -14,7 +14,6 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
-#include <cstring>
 #include <string>
 #include <vector>
 
@@ -54,27 +53,6 @@ class FdHog {
     std::vector<int> fds_;
 };
 
-// 期限つきで 1 本読む。期限切れは閉じずに cancel するだけなので、後で読み直せる。
-boost::system::error_code read_within(net::io_context &ioc, boost::beast::tcp_stream &s,
-                                      boost::beast::flat_buffer &buf,
-                                      http::response<http::string_body> &res,
-                                      std::chrono::milliseconds limit) {
-    boost::system::error_code out;
-    net::steady_timer timer(ioc, limit);
-    http::async_read(s, buf, res, [&](boost::system::error_code ec, std::size_t) {
-        out = ec;
-        timer.cancel();
-    });
-    timer.async_wait([&](boost::system::error_code ec) {
-        if (!ec) {
-            s.cancel();
-        }
-    });
-    ioc.restart();
-    ioc.run();
-    return out;
-}
-
 } // namespace
 
 TEST(Limits, OversizeHeaderIs431) {
@@ -82,17 +60,13 @@ TEST(Limits, OversizeHeaderIs431) {
         app.limits().max_header_bytes = 64;
         app.get("/", [](hayate::Request &) { return hayate::Response::text("ok"); });
     });
-    net::io_context ioc;
-    boost::beast::tcp_stream stream(ioc);
-    stream.connect(net::ip::tcp::endpoint(net::ip::make_address("127.0.0.1"), srv.port()));
+    Conn c(srv.port());
     http::request<http::string_body> req{http::verb::get, "/", 11};
     req.set(http::field::host, "127.0.0.1");
     req.set("X-Big", std::string(200, 'a'));
-    http::write(stream, req);
-    boost::beast::flat_buffer buf;
+    ASSERT_FALSE(c.write(req));
     http::response<http::string_body> res;
-    boost::system::error_code ec;
-    http::read(stream, buf, res, ec);
+    const auto ec = c.read(res);
     ASSERT_FALSE(ec) << ec.message();
     EXPECT_EQ(res.result_int(), 431);
 }
@@ -111,16 +85,13 @@ TEST(Limits, ReadTimeoutCloses) {
         app.limits().read_timeout = std::chrono::milliseconds(50);
         app.get("/", [](hayate::Request &) { return hayate::Response::text("ok"); });
     });
-    net::io_context ioc;
-    boost::beast::tcp_stream stream(ioc);
-    stream.connect(net::ip::tcp::endpoint(net::ip::make_address("127.0.0.1"), srv.port()));
-    const char *partial = "GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n";
-    net::write(stream.socket(), net::buffer(partial, std::strlen(partial)));
-    boost::beast::flat_buffer buf;
+    Conn c(srv.port());
+    ASSERT_FALSE(c.write_raw("GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n"));
     http::response<http::string_body> res;
-    boost::system::error_code ec;
-    http::read(stream, buf, res, ec);
+    // client の期限切れではなく、サーバーが閉じたこと。
+    const auto ec = c.read(res, std::chrono::seconds(5));
     EXPECT_TRUE(ec);
+    EXPECT_NE(ec, boost::beast::error::timeout);
 }
 
 TEST(Limits, IdleTimeoutClosesKeepAlive) {
@@ -129,27 +100,23 @@ TEST(Limits, IdleTimeoutClosesKeepAlive) {
         app.limits().read_timeout = std::chrono::seconds(5);
         app.get("/a", [](hayate::Request &) { return hayate::Response::text("a"); });
     });
-    net::io_context ioc;
-    boost::beast::tcp_stream stream(ioc);
-    stream.connect(net::ip::tcp::endpoint(net::ip::make_address("127.0.0.1"), srv.port()));
+    Conn c(srv.port());
     http::request<http::string_body> req{http::verb::get, "/a", 11};
     req.set(http::field::host, "127.0.0.1");
     req.keep_alive(true);
-    http::write(stream, req);
-    boost::beast::flat_buffer buf;
+    ASSERT_FALSE(c.write(req));
     http::response<http::string_body> res;
-    http::read(stream, buf, res);
+    ASSERT_FALSE(c.read(res));
     EXPECT_EQ(res.result_int(), 200);
     EXPECT_EQ(res.body(), "a");
-    stream.expires_after(std::chrono::seconds(8));
     http::response<http::string_body> idle;
-    boost::system::error_code ec;
     auto t0 = std::chrono::steady_clock::now();
-    http::read(stream, buf, idle, ec);
+    const auto ec = c.read(idle, std::chrono::seconds(8));
     auto ms =
         std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0)
             .count();
     EXPECT_TRUE(ec);
+    EXPECT_NE(ec, boost::beast::error::timeout);
     EXPECT_LT(ms, 1000) << "idle timeout must fire before read_timeout";
 }
 
@@ -158,18 +125,15 @@ TEST(Limits, MaxConnectionsRefusesNew) {
         app.limits().max_connections = 1;
         app.get("/", [](hayate::Request &) { return hayate::Response::text("ok"); });
     });
-    net::io_context ioc;
-    boost::beast::tcp_stream hold(ioc);
-    hold.connect(net::ip::tcp::endpoint(net::ip::make_address("127.0.0.1"), srv.port()));
-    boost::beast::tcp_stream extra(ioc);
-    extra.expires_after(std::chrono::seconds(1));
-    boost::system::error_code ec;
-    extra.connect(net::ip::tcp::endpoint(net::ip::make_address("127.0.0.1"), srv.port()), ec);
-    extra.socket().write_some(net::buffer(std::string("GET / HTTP/1.1\r\nHost: x\r\n\r\n")), ec);
-    boost::beast::flat_buffer buf;
+    Conn hold(srv.port());
+    ASSERT_FALSE(hold.connect_error());
+    // TCP は backlog で繋がる。サーバーは accept した直後に切るので、書き込みの失敗は見ない。
+    Conn extra(srv.port());
+    (void)extra.write_raw("GET / HTTP/1.1\r\nHost: x\r\n\r\n");
     http::response<http::string_body> res;
-    http::read(extra, buf, res, ec);
+    const auto ec = extra.read(res);
     EXPECT_TRUE(ec);
+    EXPECT_NE(ec, boost::beast::error::timeout);
 }
 
 TEST(Limits, ReadTimeoutAppliesToKeepAliveRequests) {
@@ -178,30 +142,26 @@ TEST(Limits, ReadTimeoutAppliesToKeepAliveRequests) {
         app.limits().idle_timeout = std::chrono::seconds(5);
         app.get("/a", [](hayate::Request &) { return hayate::Response::text("a"); });
     });
-    net::io_context ioc;
-    boost::beast::tcp_stream stream(ioc);
-    stream.connect(net::ip::tcp::endpoint(net::ip::make_address("127.0.0.1"), srv.port()));
+    Conn c(srv.port());
     http::request<http::string_body> req{http::verb::get, "/a", 11};
     req.set(http::field::host, "127.0.0.1");
     req.keep_alive(true);
-    http::write(stream, req);
-    boost::beast::flat_buffer buf;
+    ASSERT_FALSE(c.write(req));
     http::response<http::string_body> res;
-    http::read(stream, buf, res);
+    ASSERT_FALSE(c.read(res));
     ASSERT_EQ(res.result_int(), 200);
 
     // 2 本目を途中まで送る。窓は read_timeout であって idle_timeout ではない。
-    const char *partial = "POST /a HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 10\r\n\r\nab";
-    net::write(stream.socket(), net::buffer(partial, std::strlen(partial)));
-    stream.expires_after(std::chrono::seconds(8));
+    ASSERT_FALSE(
+        c.write_raw("POST /a HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 10\r\n\r\nab"));
     http::response<http::string_body> second;
-    boost::system::error_code ec;
     auto t0 = std::chrono::steady_clock::now();
-    http::read(stream, buf, second, ec);
+    const auto ec = c.read(second, std::chrono::seconds(8));
     auto ms =
         std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0)
             .count();
     EXPECT_TRUE(ec);
+    EXPECT_NE(ec, boost::beast::error::timeout);
     EXPECT_LT(ms, 1000) << "read timeout must govern the body of a keep-alive request";
 }
 
@@ -210,31 +170,25 @@ TEST(Limits, AcceptSurvivesFdExhaustion) {
     TestServer srv([](hayate::App &app) {
         app.get("/", [](hayate::Request &) { return hayate::Response::text("ok"); });
     });
-    const net::ip::tcp::endpoint ep(net::ip::make_address("127.0.0.1"), srv.port());
     // 使い切った後はクライアントも fd を作れない。2 本とも先に取っておく。
-    net::io_context ioc;
-    boost::beast::tcp_stream starved(ioc);
-    boost::beast::tcp_stream later(ioc);
-    starved.socket().open(net::ip::tcp::v4());
-    later.socket().open(net::ip::tcp::v4());
+    Conn starved(srv.port(), Conn::deferred);
+    Conn later(srv.port(), Conn::deferred);
     http::request<http::string_body> req{http::verb::get, "/", 11};
     req.set(http::field::host, "127.0.0.1");
     req.keep_alive(false);
-    boost::beast::flat_buffer buf;
-    http::response<http::string_body> res;
     {
         FdHog hog;
-        starved.socket().connect(ep);
-        http::write(starved, req);
+        ASSERT_FALSE(starved.connect());
+        ASSERT_FALSE(starved.write(req));
         // サーバーの accept は EMFILE になる。macOS はその接続を RST で捨て、Linux は
         // backlog に残す。どちらでも枯渇中に応答は来ない。
-        EXPECT_TRUE(read_within(ioc, starved, buf, res, std::chrono::milliseconds(200)));
+        http::response<http::string_body> res;
+        EXPECT_TRUE(starved.read(res, std::chrono::milliseconds(200)));
     }
-    later.socket().connect(ep);
-    http::write(later, req);
-    buf.clear();
-    res = {};
-    const auto ec = read_within(ioc, later, buf, res, std::chrono::seconds(2));
+    ASSERT_FALSE(later.connect());
+    ASSERT_FALSE(later.write(req));
+    http::response<http::string_body> res;
+    const auto ec = later.read(res);
     ASSERT_FALSE(ec) << ec.message();
     EXPECT_EQ(res.result_int(), 200);
 }

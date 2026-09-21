@@ -3,6 +3,7 @@
 #include <hayate/router.hpp>
 
 #include <algorithm>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -50,11 +51,13 @@ std::vector<std::string> split_path(std::string_view path) {
     return out;
 }
 
+// 名前の無い param / wildcard は名前で引けず、途中の wildcard には一致する要求が無い。
 std::vector<Seg> parse_pattern(std::string_view pattern) {
     auto parts = split_path(pattern);
     std::vector<Seg> segs;
     segs.reserve(parts.size());
-    for (auto &p : parts) {
+    for (std::size_t i = 0; i < parts.size(); ++i) {
+        auto &p = parts[i];
         Seg seg;
         if (!p.empty() && p.front() == ':') {
             seg.kind = SegKind::param;
@@ -66,9 +69,23 @@ std::vector<Seg> parse_pattern(std::string_view pattern) {
             seg.kind = SegKind::lit;
             seg.s = std::move(p);
         }
+        if (seg.kind != SegKind::lit && seg.s.empty()) {
+            throw std::invalid_argument("hayate::Router: unnamed segment in " +
+                                        std::string(pattern));
+        }
+        if (seg.kind == SegKind::wild && i + 1 != parts.size()) {
+            throw std::invalid_argument("hayate::Router: wildcard is not last in " +
+                                        std::string(pattern));
+        }
         segs.push_back(std::move(seg));
     }
     return segs;
+}
+
+bool same_shape(const std::vector<Seg> &a, const std::vector<Seg> &b) {
+    return std::equal(a.begin(), a.end(), b.begin(), b.end(), [](const Seg &x, const Seg &y) {
+        return x.kind == y.kind && (x.kind != SegKind::lit || x.s == y.s);
+    });
 }
 
 std::string join_prefix(std::string_view prefix, std::string_view path) {
@@ -123,6 +140,10 @@ Match match_path(const std::vector<Seg> &segs, const std::vector<std::string> &p
                 return {};
             }
         } else {
+            // 空を受けるのは wildcard だけ。
+            if (parts[j].empty()) {
+                return {};
+            }
             m.params.emplace_back(seg.s, parts[j]);
         }
         m.score.push_back(seg_score(seg.kind));
@@ -143,7 +164,8 @@ bool better_score(const std::vector<int> &a, const std::vector<int> &b) {
             return a[i] > b[i];
         }
     }
-    return false;
+    // 同じ形は登録できないので、長さが違うのは片方が空の wildcard で終わるときだけ。
+    return a.size() < b.size();
 }
 
 Handler compose(const std::vector<Middleware> &mws, Handler h) {
@@ -211,6 +233,13 @@ void Router::add(HttpMethod method, std::string_view path, Handler handler) {
     r.method = method;
     r.pattern = std::string(path);
     r.segs = parse_pattern(r.pattern);
+    // 同じ形の後の方には一致する要求が無い。黙って死なせず登録時に落とす。
+    for (const auto &other : impl_->routes) {
+        if (other.method == method && same_shape(other.segs, r.segs)) {
+            throw std::invalid_argument("hayate::Router: duplicate route " + method_name(method) +
+                                        " " + r.pattern);
+        }
+    }
     r.handler = std::move(handler);
     impl_->routes.push_back(std::move(r));
 }

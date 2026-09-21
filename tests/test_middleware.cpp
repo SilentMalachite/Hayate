@@ -195,6 +195,79 @@ TEST(Mw, GroupMwSkipsSiblingGroup) {
     EXPECT_EQ(trace, "A");
 }
 
+namespace {
+
+// 通った MW の印を trace に足す。
+auto marker(std::string &trace) {
+    return [&trace](std::string tag) {
+        return [&trace, tag](hayate::Request &req,
+                             hayate::Next next) -> asio::awaitable<hayate::Response> {
+            trace += tag;
+            co_return co_await next(req);
+        };
+    };
+}
+
+} // namespace
+
+// group のパスの 404 / 405 はどのルートにもマッチしていない。通るのは App の MW だけ。
+TEST(Mw, GroupMwSkipsGroup404And405) {
+    std::string trace;
+    TestServer srv([&](hayate::App &app) {
+        auto mark = marker(trace);
+        app.use(mark("P"));
+        app.group("/a", [&](hayate::Router &r) {
+            r.use(mark("A"));
+            r.get("/x", [](hayate::Request &) { return hayate::Response::text("ok"); });
+        });
+    });
+    EXPECT_EQ(http_call("127.0.0.1", srv.port(), http::verb::post, "/a/x").status, 405);
+    EXPECT_EQ(trace, "P");
+    trace.clear();
+    EXPECT_EQ(http_call("127.0.0.1", srv.port(), http::verb::get, "/a/nope").status, 404);
+    EXPECT_EQ(trace, "P");
+}
+
+TEST(Mw, NestedGroupOrder) {
+    std::string trace;
+    TestServer srv([&](hayate::App &app) {
+        auto mark = marker(trace);
+        app.use(mark("P"));
+        app.group("/o", [&](hayate::Router &r) {
+            r.use(mark("O"));
+            r.group("/i", [&](hayate::Router &rr) {
+                rr.use(mark("I"));
+                rr.get("/x", [&trace](hayate::Request &) {
+                    trace += "H";
+                    return hayate::Response::text("ok");
+                });
+            });
+        });
+    });
+    EXPECT_EQ(http_call("127.0.0.1", srv.port(), http::verb::get, "/o/i/x").status, 200);
+    EXPECT_EQ(trace, "POIH");
+}
+
+// use() は呼んだ位置に関係なく、その App / Router の全ルートに付く。
+TEST(Mw, UseAfterRouteApplies) {
+    std::string trace;
+    TestServer srv([&](hayate::App &app) {
+        auto mark = marker(trace);
+        auto ok = [](hayate::Request &) { return hayate::Response::text("ok"); };
+        app.get("/x", ok);
+        app.group("/g", [&](hayate::Router &r) {
+            r.get("/y", ok);
+            r.use(mark("G"));
+        });
+        app.use(mark("P"));
+    });
+    EXPECT_EQ(http_call("127.0.0.1", srv.port(), http::verb::get, "/x").status, 200);
+    EXPECT_EQ(trace, "P");
+    trace.clear();
+    EXPECT_EQ(http_call("127.0.0.1", srv.port(), http::verb::get, "/g/y").status, 200);
+    EXPECT_EQ(trace, "PG");
+}
+
 // 例外を 500 にした後も接続は閉じない。同じ接続の次の要求が通る。
 TEST(Mw, KeepAliveAfter500) {
     TestServer srv([](hayate::App &app) {

@@ -4,6 +4,7 @@
 
 #include <openssl/evp.h>
 #include <openssl/pem.h>
+#include <openssl/rsa.h>
 #include <openssl/x509.h>
 
 #include <cstdio>
@@ -15,14 +16,16 @@
 // 鍵をリポジトリに置かないため、自己署名証明書はテスト実行時に作る。
 class TempCert {
   public:
-    TempCert() {
+    enum class Key { ec, rsa };
+
+    explicit TempCert(Key kind = Key::ec) {
         cert_ = dir_.dir / "server.pem";
         key_ = dir_.dir / "server.key";
 
-        std::unique_ptr<EVP_PKEY, decltype(&EVP_PKEY_free)> pkey(EVP_EC_gen("prime256v1"),
-                                                                 &EVP_PKEY_free);
+        std::unique_ptr<EVP_PKEY, decltype(&EVP_PKEY_free)> pkey(
+            kind == Key::ec ? EVP_EC_gen("prime256v1") : EVP_RSA_gen(2048), &EVP_PKEY_free);
         if (!pkey) {
-            throw std::runtime_error("EVP_EC_gen failed");
+            throw std::runtime_error("key generation failed");
         }
         std::unique_ptr<X509, decltype(&X509_free)> x509(X509_new(), &X509_free);
         if (!x509) {

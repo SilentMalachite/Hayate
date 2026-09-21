@@ -356,20 +356,15 @@ TEST(Static, KeepAliveAfterStreamedFile) {
     }
     TestServer srv(
         [&](hayate::App &app) { app.get("/assets/*path", hayate::files(root.dir.string())); });
-    namespace net = boost::asio;
-    net::io_context ioc;
-    boost::beast::tcp_stream stream(ioc);
-    stream.expires_after(std::chrono::seconds(5));
-    stream.connect(net::ip::tcp::endpoint(net::ip::make_address("127.0.0.1"), srv.port()));
-    boost::beast::flat_buffer buf;
-    auto send = [&](const std::string &target) {
-        stream.expires_after(std::chrono::seconds(5));
+    Conn c(srv.port(), std::chrono::seconds(5));
+    auto send = [&](const std::string &target) -> std::string {
         http::request<http::string_body> req{http::verb::get, target, 11};
         req.set(http::field::host, "127.0.0.1");
         req.keep_alive(true);
-        http::write(stream, req);
         http::response<http::string_body> res;
-        http::read(stream, buf, res);
+        if (c.write(req, std::chrono::seconds(5)) || c.read(res, std::chrono::seconds(5))) {
+            return {};
+        }
         return res.body();
     };
     // 1 本目を Content-Length ちょうどで閉じていなければ 2 本目が読めない。

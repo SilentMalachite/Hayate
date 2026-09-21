@@ -1,3 +1,4 @@
+#include "conn_client.hpp"
 #include "http_client.hpp"
 #include "metrics_text.hpp"
 #include "test_server.hpp"
@@ -6,6 +7,7 @@
 
 #include <gtest/gtest.h>
 
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <future>
@@ -68,33 +70,34 @@ TEST(Metrics, RejectedOverMaxConnections) {
         setup(app);
     });
     namespace net = boost::asio;
-    namespace beast = boost::beast;
-    net::io_context ioc;
     // A を keep-alive で握ったままにする。これで open = 1。
-    beast::tcp_stream a(ioc);
-    a.expires_after(std::chrono::seconds(5));
-    a.connect(net::ip::tcp::endpoint(net::ip::make_address("127.0.0.1"), srv.port()));
-    beast::flat_buffer abuf;
-    auto send = [&](const std::string &target) {
-        a.expires_after(std::chrono::seconds(5));
+    Conn a(srv.port(), std::chrono::seconds(5));
+    auto send = [&](const std::string &target) -> std::string {
         http::request<http::string_body> req{http::verb::get, target, 11};
         req.set(http::field::host, "127.0.0.1");
         req.keep_alive(true);
-        http::write(a, req);
         http::response<http::string_body> res;
-        http::read(a, abuf, res);
+        if (a.write(req, std::chrono::seconds(5)) || a.read(res, std::chrono::seconds(5))) {
+            return {};
+        }
         return res.body();
     };
     EXPECT_EQ(send("/"), "ok");
 
     // B は上限に当たる。EOF を見た時点で拒否カウンタは進んでいる。
-    net::ip::tcp::socket b(ioc);
-    b.connect(net::ip::tcp::endpoint(net::ip::make_address("127.0.0.1"), srv.port()));
-    boost::system::error_code ec;
-    std::array<char, 16> sink{};
-    b.read_some(net::buffer(sink), ec);
-    EXPECT_TRUE(static_cast<bool>(ec)) << "B should be closed by the server";
-    b.close(ec);
+    {
+        Conn b(srv.port());
+        std::array<char, 16> sink{};
+        const auto ec =
+            b.run(std::chrono::seconds(2), [&]() -> net::awaitable<boost::system::error_code> {
+                auto [rec, n] =
+                    co_await b.stream().async_read_some(net::buffer(sink), net::as_tuple);
+                (void)n;
+                co_return rec;
+            });
+        EXPECT_TRUE(static_cast<bool>(ec)) << "B should be closed by the server";
+        EXPECT_NE(ec, boost::beast::error::timeout);
+    }
 
     const auto body = send("/metrics");
     EXPECT_EQ(value_of(body, "hayate_connections_rejected_total"), 1);

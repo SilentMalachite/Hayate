@@ -431,6 +431,30 @@ TEST(Base64url, DecodesUrlAlphabetOnly) {
     }
 }
 
+// 最後の文字の未使用ビットを捨てると、同じバイト列に綴りが何通りもできる。
+TEST(Base64url, RejectsNonZeroTrailingBits) {
+    using hayate::detail::base64url_decode;
+    EXPECT_EQ(base64url_decode("QQ"), "A");
+    EXPECT_FALSE(base64url_decode("QR").has_value());
+    EXPECT_EQ(base64url_decode("YWI"), "ab");
+    EXPECT_FALSE(base64url_decode("YWJ").has_value());
+}
+
+// 署名の最後の文字は下位 2 ビットが未使用。そこだけ変えても、緩い decoder では同じ署名に戻る。
+TEST(Jwt, NonCanonicalSignatureIs401) {
+    TestServer srv([](hayate::App &app) { protect(app, base_cfg()); });
+    const auto good = make_token(hs256_header(),
+                                 Json::object({{"sub", "alice"}, {"exp", now_s() + 300}}), kSecret);
+    ASSERT_EQ(call(srv.port(), good).status, 200);
+    static constexpr std::string_view alphabet =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    auto tok = good;
+    const auto v = alphabet.find(tok.back());
+    ASSERT_NE(v, std::string_view::npos);
+    tok.back() = alphabet[v ^ 1];
+    EXPECT_EQ(call(srv.port(), tok).status, 401);
+}
+
 // 形の崩れた header / payload は、署名が正しくても 401。
 TEST(Jwt, MalformedJoseIs401) {
     TestServer srv([](hayate::App &app) { protect(app, base_cfg()); });

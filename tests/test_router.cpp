@@ -3,6 +3,9 @@
 
 #include <gtest/gtest.h>
 
+#include <stdexcept>
+#include <string>
+
 namespace http = boost::beast::http;
 
 // ハンドラは全接続で共有される。mutable は同期・非同期とも受けない。
@@ -219,15 +222,41 @@ TEST(Router, InvalidHeaderNameIsIgnored) {
     EXPECT_EQ(r.extra["Bad Name"], "");
 }
 
-// 全セグメント同点なら先に登録した方。
-TEST(Router, EqualScoreFirstRegisteredWins) {
-    TestServer srv([](hayate::App &app) {
-        app.get("/u/:id", [](hayate::Request &) { return hayate::Response::text("id"); });
-        app.get("/u/:name", [](hayate::Request &) { return hayate::Response::text("name"); });
-    });
-    auto r = http_call("127.0.0.1", srv.port(), http::verb::get, "/u/7");
-    EXPECT_EQ(r.status, 200);
-    EXPECT_EQ(r.body, "id");
+// 同じ形の後の方には一致する要求が無い。param / wildcard の名前は形に入らない。
+TEST(Router, DuplicateShapeThrows) {
+    auto h = [](hayate::Request &) { return hayate::Response::text("x"); };
+    {
+        hayate::App app;
+        app.get("/u/:id", h);
+        EXPECT_THROW(app.get("/u/:id", h), std::invalid_argument);
+        EXPECT_THROW(app.get("/u/:name", h), std::invalid_argument);
+        EXPECT_NO_THROW(app.post("/u/:name", h));
+        EXPECT_NO_THROW(app.get("/u/me", h));
+        EXPECT_NO_THROW(app.get("/u/*rest", h));
+        EXPECT_THROW(app.get("/u/*all", h), std::invalid_argument);
+    }
+    {
+        // group をまたいでも、group の中同士でも同じ。
+        hayate::App app;
+        app.group("/api", [&](hayate::Router &r) { r.get("/ping", h); });
+        EXPECT_THROW(app.get("/api/ping", h), std::invalid_argument);
+        EXPECT_THROW(app.group("/g",
+                               [&](hayate::Router &r) {
+                                   r.get("/x", h);
+                                   r.get("/x", h);
+                               }),
+                     std::invalid_argument);
+    }
+}
+
+// 名前の無い param / wildcard と途中の wildcard は、一致する要求が無いか名前で引けない。
+TEST(Router, MalformedPatternThrows) {
+    auto h = [](hayate::Request &) { return hayate::Response::text("x"); };
+    hayate::App app;
+    for (const char *p : {"/a/:", "/a/*", "/:", "/*", "/a/*rest/b"}) {
+        EXPECT_THROW(app.get(p, h), std::invalid_argument) << p;
+    }
+    EXPECT_NO_THROW(app.get("/a/*rest", h));
 }
 
 // セグメントごとに param > wildcard。登録順で覆らない。
@@ -247,6 +276,54 @@ TEST(Router, ParamBeatsWildcard) {
         auto r = http_call("127.0.0.1", srv.port(), http::verb::get, "/a/b");
         EXPECT_EQ(r.body, "param") << "wildcard_first=" << wildcard_first;
     }
+}
+
+// 空の wildcard より完全一致。登録順で覆らない。
+TEST(Router, ExactBeatsEmptyWildcard) {
+    for (const bool wildcard_first : {false, true}) {
+        TestServer srv([&](hayate::App &app) {
+            auto exact = [](hayate::Request &) { return hayate::Response::text("exact"); };
+            auto wild = [](hayate::Request &req) {
+                return hayate::Response::text("wild:" + std::string(req.param("rest")));
+            };
+            if (wildcard_first) {
+                app.get("/a/*rest", wild);
+                app.get("/a", exact);
+            } else {
+                app.get("/a", exact);
+                app.get("/a/*rest", wild);
+            }
+        });
+        const auto ctx = "wildcard_first=" + std::to_string(wildcard_first);
+        EXPECT_EQ(http_call("127.0.0.1", srv.port(), http::verb::get, "/a").body, "exact") << ctx;
+        EXPECT_EQ(http_call("127.0.0.1", srv.port(), http::verb::get, "/a/b").body, "wild:b")
+            << ctx;
+    }
+}
+
+TEST(Router, RootBeatsEmptyWildcard) {
+    TestServer srv([](hayate::App &app) {
+        app.get("/*rest", [](hayate::Request &) { return hayate::Response::text("wild"); });
+        app.get("/", [](hayate::Request &) { return hayate::Response::text("root"); });
+    });
+    EXPECT_EQ(http_call("127.0.0.1", srv.port(), http::verb::get, "/").body, "root");
+    EXPECT_EQ(http_call("127.0.0.1", srv.port(), http::verb::get, "/x").body, "wild");
+}
+
+// `:name` は空のセグメントに一致しない。空を受けたいなら wildcard。
+TEST(Router, ParamSkipsEmptySegment) {
+    TestServer srv([](hayate::App &app) {
+        app.get("/a/:x", [](hayate::Request &) { return hayate::Response::text("a"); });
+        app.get("/b/:x/c", [](hayate::Request &) { return hayate::Response::text("b"); });
+        app.get("/d/:x", [](hayate::Request &) { return hayate::Response::text("param"); });
+        app.get("/d/*rest", [](hayate::Request &req) {
+            return hayate::Response::text("wild:" + std::string(req.param("rest")));
+        });
+    });
+    EXPECT_EQ(http_call("127.0.0.1", srv.port(), http::verb::get, "/a/").status, 404);
+    EXPECT_EQ(http_call("127.0.0.1", srv.port(), http::verb::get, "/b//c").status, 404);
+    EXPECT_EQ(http_call("127.0.0.1", srv.port(), http::verb::get, "/d/").body, "wild:");
+    EXPECT_EQ(http_call("127.0.0.1", srv.port(), http::verb::get, "/d/e").body, "param");
 }
 
 // 末尾の `/` は消さないので、`/a` と `/a/` は別ルート。group の "/" も `/api/` になる。

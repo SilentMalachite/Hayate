@@ -164,6 +164,8 @@ public:
 ```
 
 `ok()==false` で `value()`、`ok()==true` で `error()` は契約違反（assert）。例外で結果を返さない。
+`std::move(r).value()` の後の `r` は読まない（中身は move 済みで、`ok()` は true のまま）。
+`error()` は `const&` だけで、move して取り出す版は持たない。
 
 ### Handler / Middleware
 
@@ -183,15 +185,22 @@ using Middleware = std::function<asio::awaitable<Response>(Request&, Next)>;
 
 onion: 入りは登録順 A→B、戻りは B→A。`next` を呼ばなければ短絡。
 App の `use()` は 404/405 を含む dispatch 全体を包む（CORS preflight とエラー応答にヘッダが要る）。
-`group` の MW はマッチしたルートにだけ付く。
+`group` の MW はマッチしたルートにだけ付く。group のパスで出る 404 / 405 はどのルートにも
+マッチしていないので、group の MW を通らない（App の MW だけ）。
+入れ子は App → 外の group → 内の group → ハンドラ。`use()` は呼んだ位置に関係なく、その App / Router の
+全ルートに付く。
 ハンドラと MW が投げた例外は `dispatch` が 500 に変換する。接続は閉じない。
 
 ### ルーティング
 
 - メソッドは `GET` と `POST` のみ
-- `:name` は 1 セグメント。`*name` は残り全部（空でも可）
+- `:name` は空でない 1 セグメント。`*name` は残り全部（空でも可）で、最後のセグメントにだけ置ける
+- 名前の無い `:` / `*` と、最後以外の `*name` は登録時に `std::invalid_argument` を投げる
 - 欠けた param / query / header は空 `string_view`
-- 一致優先: 各セグメントで static > param > wildcard。全セグメント同点なら先に登録した方
+- 一致優先: 各セグメントで static > param > wildcard。そこまで同点で片方だけが空の `*name` で
+  終わるなら、終わらない方（`/a` と `/a/*rest` への `GET /a` は `/a`）。登録順では決めない
+- 同じメソッドで同じ形（各セグメントの種類と static の文字列が同じ。param / wildcard の名前は見ない）を
+  2 回登録したら投げる。後の方に一致する要求は無い
 - パス無し 404。パスはあるがメソッド違い 405 + `Allow`
 - `group(prefix, fn)` は接頭辞連結。連結した全体で、連続する `/` を 1 つに畳む。末尾 `/` は消さない
 - `/a` と `/a/` は別ルート
@@ -271,6 +280,7 @@ T* Request::get() noexcept;       // 無ければ nullptr
 ```
 
 寿命は Request。ポインタを Response / App に保存しない。
+同じ `T` を `set` し直すと前の値は壊れ、前に返した参照とポインタは無効になる。
 
 ### TLS（Phase 3）
 
@@ -328,7 +338,8 @@ app.use(hayate::mw::jwt({.secret = "...", .issuer = "", .audience = "",
 - 検証の順
   1. `Authorization` が `Bearer ` で始まる（スキームは大小無視）
   2. `.` で 3 つちょうどに割れる
-  3. header と payload が base64url（パディング無し）で復号できる
+  3. header と payload が base64url（パディング無し）で復号できる。末尾の未使用ビットが 0 でない
+     符号は正準でないので復号できないとみなす（署名も同じ。1 つの署名に綴りが何通りもできない）
   4. header の `alg` が `HS256`（文字列でなければ 401）
   5. `HMAC-SHA256(secret, header_b64 + "." + payload_b64)` と署名が一致。比較は定数時間。
      HMAC の計算に失敗した場合と、計算結果が 32 バイトでない場合は 401（空署名として通さない）
@@ -359,11 +370,14 @@ app.get("/metrics", hayate::metrics(app));
 hayate_connections_accepted_total   counter
 hayate_connections_rejected_total   counter  max_connections 超過で拒否した数
 hayate_connections_open             gauge    いま開いている接続
-hayate_requests_total               counter  応答を書いた数
+hayate_requests_total               counter  書こうとした応答の数
 hayate_responses_total{class="Nxx"} counter  1xx..5xx の 5 本
 ```
 
-- `requests_total` は応答を書いた数。上限超過の 413 / 431 も数える（Router に届かなくても応答は返る）
+- `requests_total` と `responses_total` は応答を書く直前に数える。書き込みが途中で失敗しても数える。
+  上限超過の 413 / 431 も数える（Router に届かなくても応答は返る）
+- 系列はそれぞれ独立に進む。1 回の出力の中で系列同士（`requests_total` と `responses_total` の和など）が
+  一致するとは限らない
 - `responses_total` のクラスは `status / 100`。範囲外は数えない
 - `/metrics` 自身は自分の出力に入らない。応答を書く直前に数えるので次のスクレイプに出る
 - ヒストグラム / per-route ラベル / OpenTelemetry は出さない
@@ -414,6 +428,9 @@ I/O モデル:
 - 同時に走る読みは `io_threads` 本まで。溢れた分はプールのキューで待つ
 - ハンドラはバイトを読まない。`Response` に `FileSource`（path / size / プール / 開いたファイル）を載せ、
   Connection が送出する。`path` は Content-Type の判定にだけ使う
+- `FileSource` を作るのは `files()` だけ（開いたファイルの型は公開しない）。`pool` を取り出して
+  App より長く持たない。ワーカーの完了は App の `io_context` に戻るので、App が先に壊れると
+  壊れた strand を触る
 - **open はハンドラ側（ワーカー）で済ませる。**root 内かの判定は開いた fd の実パスに対して行い、
   検証した対象と送る対象を同じにする。Connection は送出時にパスを辿り直さない（symlink 差し替えを防ぐ）
 - 通常ファイル以外（FIFO・デバイス・ディレクトリ）は 404。open で待たされないよう
