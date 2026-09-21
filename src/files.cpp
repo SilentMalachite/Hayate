@@ -84,7 +84,14 @@ Response stat_blocking(const fs::path &root, const std::string &raw, std::uint64
 
 Handler files(std::string_view root, std::uint64_t max_bytes, std::uint32_t io_threads,
               std::chrono::milliseconds fs_timeout) {
-    fs::path root_path = fs::weakly_canonical(fs::path{std::string(root)});
+    // 先に絶対パスにする。libstdc++ の weakly_canonical は未作成の相対パスを相対のまま返し、
+    // 後で作られると候補（絶対パス）が contained() で弾かれる。
+    std::error_code abs_ec;
+    auto abs_root = fs::absolute(fs::path{std::string(root)}, abs_ec);
+    if (abs_ec) {
+        abs_root = fs::path{std::string(root)};
+    }
+    fs::path root_path = fs::weakly_canonical(abs_root);
     // root が未作成だと weakly_canonical が末尾 separator を残し、contained() が常に偽になる。
     if (root_path.filename().empty() && root_path.parent_path() != root_path) {
         root_path = root_path.parent_path();

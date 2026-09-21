@@ -385,6 +385,7 @@ app.get("/assets/*path", hayate::files("public", 4u * 1024 * 1024, 4));
   std::chrono::milliseconds fs_timeout = std::chrono::seconds(5))`
 - `max_bytes` は配布上限。既定 `0` は無制限。`0` 以外でそれを超える実ファイルは 404（存在を漏らさない）
 - root の末尾 `/` は無視する。登録時に root が無くても同じ扱い
+- 相対パスの root は登録時のカレントディレクトリで絶対パスに解決する（未作成でも）
 - wildcard 名は `path`。空なら `index.html`
 - root の外（`..` / 絶対パス）は 404（存在を漏らさない）
 - 復号後のパスに NUL が入っていたら 404
