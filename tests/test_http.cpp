@@ -205,3 +205,24 @@ TEST(Http, NoContentDropsHandlerBody) {
     EXPECT_EQ(res.count(http::field::content_length), 0u);
     EXPECT_TRUE(res.body().empty());
 }
+
+// Beast はヘッダ 1 本が 64 KiB 弱を超えると投げる。投げると応答なしで切れる。
+TEST(Http, OversizedHeaderIs500) {
+    TestServer srv([](hayate::App &app) {
+        app.get("/", [](hayate::Request &) {
+            auto res = hayate::Response::text("ok");
+            res.set_header("X-Big", std::string(70000, 'a'));
+            return res;
+        });
+    });
+    Conn c(srv.port());
+    boost::system::error_code ec;
+    http::write(c.stream, make_req(http::verb::get, "/", false), ec);
+    http::response<http::string_body> res;
+    if (!ec) {
+        http::read(c.stream, c.buf, res, ec);
+    }
+    ASSERT_FALSE(ec) << ec.message();
+    EXPECT_EQ(res.result_int(), 500);
+    EXPECT_EQ(res.count("X-Big"), 0u);
+}

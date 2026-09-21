@@ -112,3 +112,19 @@ TEST(Metrics, RejectedOverMaxConnections) {
     EXPECT_EQ(value_of(body, "hayate_connections_rejected_total"), 1);
     EXPECT_EQ(value_of(body, "hayate_connections_open"), 1);
 }
+
+// 送れないヘッダは 500 に差し替える。metrics もハンドラの 200 ではなく送った 500 で数える。
+TEST(Metrics, OversizedHeaderCountsAs5xx) {
+    TestServer srv([](hayate::App &app) {
+        app.get("/big", [](hayate::Request &) {
+            auto res = hayate::Response::text("ok");
+            res.set_header("X-Big", std::string(70000, 'a'));
+            return res;
+        });
+        app.get("/metrics", hayate::metrics(app));
+    });
+    http_call("127.0.0.1", srv.port(), http::verb::get, "/big");
+    auto r = http_call("127.0.0.1", srv.port(), http::verb::get, "/metrics");
+    EXPECT_EQ(value_of(r.body, "hayate_responses_total{class=\"5xx\"}"), 1);
+    EXPECT_EQ(value_of(r.body, "hayate_responses_total{class=\"2xx\"}"), 0);
+}

@@ -13,6 +13,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
@@ -92,6 +93,17 @@ http::response<http::string_body> to_beast(const Response &src, unsigned version
     out.body() = std::string(src.body());
     out.prepare_payload();
     return out;
+}
+
+// Beast がヘッダ 1 本に許す長さ（名前・値とも）。超えると set() が投げ、応答なしで切れる。
+constexpr std::size_t beast_field_max = std::numeric_limits<std::uint16_t>::max() - 2;
+
+bool fits_beast(const Response &res) {
+    bool ok = true;
+    res.for_each_header([&](std::string_view k, std::string_view v) {
+        ok = ok && k.size() <= beast_field_max && v.size() <= beast_field_max;
+    });
+    return ok;
 }
 
 // 上限超過だけは応答を書ける。timeout や peer close は書き先が無い。
@@ -309,6 +321,10 @@ class Connection : public std::enable_shared_from_this<Connection<Stream>> {
                 Request req;
                 load(req, parser.get());
                 Response res = co_await router_.dispatch(req);
+                // 送れない応答はここで 500 にする。数えるのは実際に送るステータス。
+                if (!fits_beast(res)) {
+                    res = Response::from_error({"internal", "Internal Server Error", 500});
+                }
                 detail::count_response(counters_, res.status());
                 const bool head = parser.get().method() == http::verb::head;
                 bool keep = parser.get().keep_alive() && !shutting_.load();
