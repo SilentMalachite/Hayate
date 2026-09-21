@@ -5,12 +5,74 @@
 #include <boost/beast.hpp>
 #include <gtest/gtest.h>
 
+#include <fcntl.h>
+#include <sys/resource.h>
+#include <unistd.h>
+
+#include <algorithm>
 #include <chrono>
 #include <cstring>
 #include <string>
+#include <vector>
 
 namespace http = boost::beast::http;
 namespace net = boost::asio;
+
+namespace {
+
+// プロセスの fd を使い切り、サーバーの accept を EMFILE で失敗させる。
+// ctest はテストごとに別プロセスなので、limit を下げても他のテストに漏れない。
+class FdHog {
+  public:
+    FdHog() {
+        ::getrlimit(RLIMIT_NOFILE, &saved_);
+        rlimit low = saved_;
+        low.rlim_cur = std::min<rlim_t>(saved_.rlim_cur, 512);
+        ::setrlimit(RLIMIT_NOFILE, &low);
+        for (;;) {
+            const int fd = ::open("/dev/null", O_RDONLY | O_CLOEXEC);
+            if (fd == -1) {
+                break;
+            }
+            fds_.push_back(fd);
+        }
+    }
+    ~FdHog() {
+        for (const int fd : fds_) {
+            ::close(fd);
+        }
+        ::setrlimit(RLIMIT_NOFILE, &saved_);
+    }
+    FdHog(const FdHog &) = delete;
+    FdHog &operator=(const FdHog &) = delete;
+
+  private:
+    rlimit saved_{};
+    std::vector<int> fds_;
+};
+
+// 期限つきで 1 本読む。期限切れは閉じずに cancel するだけなので、後で読み直せる。
+boost::system::error_code read_within(net::io_context &ioc, boost::beast::tcp_stream &s,
+                                      boost::beast::flat_buffer &buf,
+                                      http::response<http::string_body> &res,
+                                      std::chrono::milliseconds limit) {
+    boost::system::error_code out;
+    net::steady_timer timer(ioc, limit);
+    http::async_read(s, buf, res, [&](boost::system::error_code ec, std::size_t) {
+        out = ec;
+        timer.cancel();
+    });
+    timer.async_wait([&](boost::system::error_code ec) {
+        if (!ec) {
+            s.cancel();
+        }
+    });
+    ioc.restart();
+    ioc.run();
+    return out;
+}
+
+} // namespace
 
 TEST(Limits, OversizeHeaderIs431) {
     TestServer srv([](hayate::App &app) {
@@ -138,4 +200,38 @@ TEST(Limits, ReadTimeoutAppliesToKeepAliveRequests) {
             .count();
     EXPECT_TRUE(ec);
     EXPECT_LT(ms, 1000) << "read timeout must govern the body of a keep-alive request";
+}
+
+// accept が一度失敗しただけで accept ループを終えると、fd が戻っても誰も繋げない。
+TEST(Limits, AcceptSurvivesFdExhaustion) {
+    TestServer srv([](hayate::App &app) {
+        app.get("/", [](hayate::Request &) { return hayate::Response::text("ok"); });
+    });
+    const net::ip::tcp::endpoint ep(net::ip::make_address("127.0.0.1"), srv.port());
+    // 使い切った後はクライアントも fd を作れない。2 本とも先に取っておく。
+    net::io_context ioc;
+    boost::beast::tcp_stream starved(ioc);
+    boost::beast::tcp_stream later(ioc);
+    starved.socket().open(net::ip::tcp::v4());
+    later.socket().open(net::ip::tcp::v4());
+    http::request<http::string_body> req{http::verb::get, "/", 11};
+    req.set(http::field::host, "127.0.0.1");
+    req.keep_alive(false);
+    boost::beast::flat_buffer buf;
+    http::response<http::string_body> res;
+    {
+        FdHog hog;
+        starved.socket().connect(ep);
+        http::write(starved, req);
+        // サーバーの accept は EMFILE になる。macOS はその接続を RST で捨て、Linux は
+        // backlog に残す。どちらでも枯渇中に応答は来ない。
+        EXPECT_TRUE(read_within(ioc, starved, buf, res, std::chrono::milliseconds(200)));
+    }
+    later.socket().connect(ep);
+    http::write(later, req);
+    buf.clear();
+    res = {};
+    const auto ec = read_within(ioc, later, buf, res, std::chrono::seconds(2));
+    ASSERT_FALSE(ec) << ec.message();
+    EXPECT_EQ(res.result_int(), 200);
 }

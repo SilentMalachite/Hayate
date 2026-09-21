@@ -208,6 +208,8 @@ App の `use()` は 404/405 を含む dispatch 全体を包む（CORS preflight 
 - `run()` は accept ループ。`asio::awaitable<void>`。`stop()` で終わる。
   acceptor は App の `io_context` に束縛されているので、`run()` もその `io_context` 上で spawn する。
   外部の executor では動かない
+- accept が失敗しても accept ループは終えない（終えるのは `stop()` だけ）。失敗したら 100 ms 待って
+  次の accept へ（fd 枯渇で空回りしない）。`stop()` はその待ちも取り消す
 - accept した接続ごとに strand を 1 本作る。その接続の socket・stream・タイマー・coroutine は
   すべてその strand 上で動く（`threads(n)` で n>1 のとき Beast の stream が要求する条件）
 - accept ループと `stop()` は管理用 strand 1 本で直列化する。`stop()` はどのスレッドから
@@ -228,6 +230,8 @@ App の `use()` は 404/405 を含む dispatch 全体を包む（CORS preflight 
 
 超過: header 431、body 413。read/write/idle 切れは接続を閉じる（応答を書けなければ書かない）。`max_connections` 超過の新規は accept せず切る。
 
+Beast / Asio の失敗は、応答を書ける段階なら `Error` にして応答する（413 / 431 / 500）。書けない段階（timeout・相手の切断・handshake 失敗）なら閉じるだけで、受け取る側のない `Error` は作らない。
+
 窓の切り分け: 1 本目のヘッダ読みは `read_timeout`。keep-alive で次の要求のヘッダを待つ間は `idle_timeout`。ヘッダが揃った後の本文読みは何本目でも `read_timeout`。
 
 HTTP/1.1 の約束:
@@ -241,6 +245,7 @@ HTTP/1.1 の約束:
   無視して `Connection: close` を送る。送ったヘッダと実際の挙動を食い違わせない
 - 1xx / 204 / 304 の応答は本文を持たない。ハンドラの本文は捨て、`Content-Length` /
   `Transfer-Encoding` は付けない（RFC 9110 §8.6、§6.4.1）
+- ヘッダの名前か値が 65533 バイト（Beast の上限）を超える応答は送れない。500 に差し替え、metrics も 500 で数える
 
 ### JSON
 

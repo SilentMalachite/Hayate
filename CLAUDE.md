@@ -48,7 +48,7 @@ Phase を飛ばさない。今の受け入れは Phase 1 と Phase 2（CORS / �
 - JSON は 1 本（優先 glaze、ダメなら nlohmann）。混在禁止
 - `new` / `delete` / `malloc`、生配列禁止
 - Request 配下は非所有 view。寿命は Request。view を App や Response に保存しない
-- 例外はハンドラ / MW 境界を出ない。Beast/Asio は `Error` に変換
+- 例外はハンドラ / MW 境界を出ない。Beast/Asio の失敗は、応答を書ける段階なら `Error` にして応答する（413 / 431 / 500）。書けない段階（timeout・相手の切断・handshake 失敗）なら閉じるだけで、受け取る側のない `Error` は作らない
 - 共有可変グローバル禁止。状態は App か Request の Extension
 - 実装が 2 つになるまで抽象・ファクトリを切らない
 - 既存フレームワーク（Drogon / Crow / Oat++ / Cinatra / userver）のコードをコピーしない
