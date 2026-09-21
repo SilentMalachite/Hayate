@@ -229,6 +229,11 @@ Router &Router::use(Middleware mw) {
 }
 
 void Router::add(HttpMethod method, std::string_view path, Handler handler) {
+    // unknown は HEAD や PUT に一致し、OPTIONS は CORS の preflight と重なる。
+    if (method != HttpMethod::get && method != HttpMethod::post) {
+        throw std::invalid_argument("hayate::Router: only GET and POST routes, got " +
+                                    std::string(path));
+    }
     Impl::Route r;
     r.method = method;
     r.pattern = std::string(path);

@@ -193,7 +193,7 @@ App の `use()` は 404/405 を含む dispatch 全体を包む（CORS preflight 
 
 ### ルーティング
 
-- メソッドは `GET` と `POST` のみ
+- メソッドは `GET` と `POST` のみ。`Router::add` に他のメソッドを渡すと `std::invalid_argument` を投げる
 - `:name` は空でない 1 セグメント。`*name` は残り全部（空でも可）で、最後のセグメントにだけ置ける
 - 名前の無い `:` / `*` と、最後以外の `*name` は登録時に `std::invalid_argument` を投げる
 - 欠けた param / query / header は空 `string_view`
