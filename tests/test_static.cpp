@@ -2,6 +2,7 @@
 #include "detail/files.hpp"
 #include "detail/open_file.hpp"
 #include "http_client.hpp"
+#include "metrics_text.hpp"
 #include "temp_dir.hpp"
 #include "test_server.hpp"
 
@@ -799,4 +800,82 @@ TEST(Static, ChunkReadDeadlineCloses) {
     EXPECT_EQ(parser.get().result_int(), 200);
     EXPECT_FALSE(parser.is_done());
     writer.close();
+}
+
+// HEAD はルーティングしないが、MW がファイルの応答を返すことはある。そのときも本文は送らず、
+// Content-Length は本文を送った場合の値。本文を送ると次の応答の先頭として読まれる。
+TEST(Static, HeadFileResponseHasLengthButNoBody) {
+    TempDir root;
+    {
+        std::ofstream out(root.dir / "index.html");
+        out << "hello";
+    }
+    TestServer srv([&](hayate::App &app) {
+        app.use([h = hayate::files(root.dir.string())](hayate::Request &req, hayate::Next next)
+                    -> boost::asio::awaitable<hayate::Response> {
+            if (req.method() == hayate::HttpMethod::unknown) {
+                co_return co_await h(req);
+            }
+            co_return co_await next(req);
+        });
+        app.get("/next", [](hayate::Request &) { return hayate::Response::text("next"); });
+    });
+    Conn c(srv.port());
+    http::request<http::string_body> head{http::verb::head, "/", 11};
+    head.set(http::field::host, "127.0.0.1");
+    head.keep_alive(true);
+    ASSERT_FALSE(c.write(head));
+    http::response_parser<http::empty_body> p;
+    p.skip(true);
+    ASSERT_FALSE(c.read(p));
+    EXPECT_EQ(p.get().result_int(), 200);
+    EXPECT_EQ(p.get()[http::field::content_length], "5");
+    http::request<http::string_body> next{http::verb::get, "/next", 11};
+    next.set(http::field::host, "127.0.0.1");
+    next.keep_alive(false);
+    ASSERT_FALSE(c.write(next));
+    http::response<http::string_body> res;
+    ASSERT_FALSE(c.read(res));
+    EXPECT_EQ(res.body(), "next");
+}
+
+// 送出中に相手が切れたら、書き込みの失敗で閉じる。write_timeout まで握らない。
+TEST(Static, PeerCloseDuringStreamCloses) {
+    constexpr std::size_t kSize = 16u * 1024 * 1024;
+    TempDir root;
+    {
+        std::ofstream out(root.dir / "big.bin", std::ios::binary);
+        out << std::string(kSize, 'z');
+    }
+    TestServer srv([&](hayate::App &app) {
+        app.limits().write_timeout = std::chrono::seconds(30);
+        app.get("/assets/*path", hayate::files(root.dir.string()));
+        app.get("/metrics", hayate::metrics(app));
+    });
+    {
+        Conn c(srv.port(), std::chrono::seconds(2), 4096);
+        ASSERT_FALSE(c.connect_error());
+        http::request<http::string_body> req{http::verb::get, "/assets/big.bin", 11};
+        req.set(http::field::host, "127.0.0.1");
+        req.keep_alive(false);
+        ASSERT_FALSE(c.write(req));
+        // 送出が始まったことを見てから、読み残したまま閉じる（RST が飛ぶ）。
+        std::array<char, 1024> first{};
+        const auto ec = c.run(std::chrono::seconds(2),
+                              [&]() -> boost::asio::awaitable<boost::system::error_code> {
+                                  auto [rec, n] = co_await c.stream().async_read_some(
+                                      boost::asio::buffer(first), boost::asio::as_tuple);
+                                  (void)n;
+                                  co_return rec;
+                              });
+        ASSERT_FALSE(ec) << ec.message();
+    }
+    // 閉じれば、開いている接続はスクレイプ自身の 1 本になる。時間ではなく状態を待つ。
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    long long open = -1;
+    while (open != 1 && std::chrono::steady_clock::now() < deadline) {
+        auto m = http_call("127.0.0.1", srv.port(), http::verb::get, "/metrics");
+        open = value_of(m.body, "hayate_connections_open");
+    }
+    EXPECT_EQ(open, 1) << "streaming connection outlived the peer";
 }
