@@ -219,8 +219,6 @@ struct Router::Impl {
 };
 
 Router::Router() : impl_(std::make_unique<Impl>()) {}
-Router::Router(Router &&) noexcept = default;
-Router &Router::operator=(Router &&) noexcept = default;
 Router::~Router() = default;
 
 Router &Router::use(Middleware mw) {

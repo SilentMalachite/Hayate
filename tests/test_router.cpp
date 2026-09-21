@@ -5,8 +5,13 @@
 
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 
 namespace http = boost::beast::http;
+
+// move 後の Router は impl_ が空で、どのメンバーも空ポインタを辿る。App と同じく動かさない。
+static_assert(!std::is_move_constructible_v<hayate::Router>);
+static_assert(!std::is_move_assignable_v<hayate::Router>);
 
 // ハンドラは全接続で共有される。mutable は同期・非同期とも受けない。
 namespace {

@@ -239,6 +239,8 @@ App の `use()` は 404/405 を含む dispatch 全体を包む（CORS preflight 
 
 ### App 寿命
 
+- App と `Router` はコピーもムーブもできない。`Router` は App が持つものと、`group()` が `fn` に渡す
+  一時的なものだけ
 - App が `io_context` と `Router` と `Limits` と acceptor を所有する
 - `bind(host, port)` は socket bind + listen まで同期。`port()==0` ならエフェメラル
 - `port()` は bind 後の実ポート

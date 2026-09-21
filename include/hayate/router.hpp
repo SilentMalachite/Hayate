@@ -47,8 +47,6 @@ class Router {
     Router();
     Router(const Router &) = delete;
     Router &operator=(const Router &) = delete;
-    Router(Router &&) noexcept;
-    Router &operator=(Router &&) noexcept;
     ~Router();
 
     Router &use(Middleware mw);
