@@ -152,6 +152,15 @@ TEST(Tls, MismatchedKeyThrows) {
                  std::exception);
 }
 
+// OpenSSL は鍵を種類ごとのスロットに入れるので、種類が違うと読み込みでは照合されない。
+TEST(Tls, MismatchedKeyTypeThrows) {
+    TempCert ec;
+    TempCert rsa(TempCert::Key::rsa);
+    hayate::App app;
+    EXPECT_THROW(app.tls({.cert_file = ec.cert().string(), .key_file = rsa.key().string()}),
+                 std::exception);
+}
+
 // ClientHello を送らない相手は、ハンドシェイクの窓（read_timeout）で切る。
 TEST(Tls, HandshakeTimeoutCloses) {
     TempCert cert;

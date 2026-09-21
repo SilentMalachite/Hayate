@@ -10,6 +10,7 @@
 #include <csignal>
 #include <cstddef>
 #include <cstdint>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <utility>
@@ -94,6 +95,10 @@ App &App::tls(Tls cfg) {
     // 読めない証明書・鍵はここで投げる。bind() と同じく設定時に落とす。
     ctx->use_certificate_chain_file(cfg.cert_file);
     ctx->use_private_key_file(cfg.key_file, ssl::context::pem);
+    // 鍵は種類ごとのスロットに入るので、種類が違うと読み込みでは照合されない。
+    if (SSL_CTX_check_private_key(ctx->native_handle()) != 1) {
+        throw std::invalid_argument("hayate::App::tls: key does not match certificate");
+    }
     impl_->ssl_ctx = std::move(ctx);
     return *this;
 }
