@@ -365,7 +365,8 @@ app.get("/assets/*path", hayate::files("public", 4u * 1024 * 1024, 4));
 ```
 
 - Handler 工場。`StaticFile` クラスは足さない（ER: Handler にぶら下がる）
-- 署名は `Handler files(std::string_view root, std::uint64_t max_bytes = 0, std::uint32_t io_threads = 2)`
+- 署名は `Handler files(std::string_view root, std::uint64_t max_bytes = 0, std::uint32_t io_threads = 2,
+  std::chrono::milliseconds fs_timeout = std::chrono::seconds(5))`
 - `max_bytes` は配布上限。既定 `0` は無制限。`0` 以外でそれを超える実ファイルは 404（存在を漏らさない）
 - root の末尾 `/` は無視する。登録時に root が無くても同じ扱い
 - wildcard 名は `path`。空なら `index.html`
@@ -380,13 +381,21 @@ I/O モデル:
 - 正規化・stat・open・read は `files()` が所有するワーカープールで行う。io スレッドは filesystem を待たない
 - プールは `files()` 1 回につき 1 つ、`io_threads` 本。既定 2。`0` は 1 に切り上げる
 - 同時に走る読みは `io_threads` 本まで。溢れた分はプールのキューで待つ
-- ハンドラはバイトを読まない。`Response` に `FileSource`（path / size / プール）を載せ、Connection が送出する
+- ハンドラはバイトを読まない。`Response` に `FileSource`（path / size / プール / 開いたファイル）を載せ、
+  Connection が送出する。`path` は Content-Type の判定にだけ使う
+- **open はハンドラ側（ワーカー）で済ませる。**root 内かの判定は開いた fd の実パスに対して行い、
+  検証した対象と送る対象を同じにする。Connection は送出時にパスを辿り直さない（symlink 差し替えを防ぐ）
+- 通常ファイル以外（FIFO・デバイス・ディレクトリ）は 404。open で待たされないよう
+  非ブロッキングで開いてから種別を見て、通常ファイルと分かった時点で非ブロッキングを外す
+- FS 待ち（正規化・stat・open とプールの順番待ち）が `fs_timeout` を超えたら 503。
+  既定 5 秒。`files()` の第 4 引数で変える
+- 期限を過ぎて待つのをやめた場合も、ワーカーが触る状態は処理が終わるまで生かす
 - 本体はサイズに関係なく常に 64 KiB ずつ送る。1 応答のメモリはファイルサイズに依らず 64 KiB
 - `Content-Length` を立てる。chunked encoding は使わない
 - 送るのは stat した `size` まで。stat 後に伸びても増やさない
 - ヘッダ送出後に読みが失敗したら（縮んだ・消えた）その場で接続を閉じる。status はもう直せない
 - `write_timeout` はチャンクごとに張り直す。大きいファイルの総送出時間は縛らない
-- 読みが `read_timeout` を超えた接続は既存のタイムアウト窓どおり閉じる（応答は書かない）
+- 送出中のチャンク読みが `read_timeout` を超えたら接続を閉じる（応答はもう直せない）
 
 ### レート制限（Phase 2）
 
