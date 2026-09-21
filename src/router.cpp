@@ -235,12 +235,13 @@ std::vector<std::pair<HttpMethod, std::string>> Router::route_table() const {
 }
 
 boost::asio::awaitable<Response> Router::dispatch(Request &req) const {
-    Handler inner = [this](Request &r) -> boost::asio::awaitable<Response> {
-        co_return co_await dispatch_route(r);
-    };
-    Handler h = compose(impl_->mws, std::move(inner));
     // 中の catch はハンドラだけを守る。MW 自身が投げた分はここで受けないと接続が落ちる。
+    // 合成も MW をコピーするので投げうる。try の中に置く。
     try {
+        Handler inner = [this](Request &r) -> boost::asio::awaitable<Response> {
+            co_return co_await dispatch_route(r);
+        };
+        Handler h = compose(impl_->mws, std::move(inner));
         co_return co_await h(req);
     } catch (...) {
         co_return internal_error();
