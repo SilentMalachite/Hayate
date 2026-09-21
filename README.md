@@ -26,7 +26,7 @@ int main() {
 | 2 | CORS / 静的ファイル / レート制限 | 済 |
 | 3 | TLS / JWT 検証 / OpenAPI 生成 / 最小 metrics / 静的ファイルのストリーミング送出 | 済 |
 
-テストは 106 本。debug preset は ASan + UBSan 込みで走る。
+テストは GoogleTest。debug preset は ASan + UBSan、`tsan` preset は TSan 込みで走る。
 
 multipart / WebSocket / SSE / gzip は**実装しない**。
 
@@ -51,9 +51,12 @@ apt install libboost-dev libssl-dev cmake ninja-build
 cmake --preset debug
 cmake --build --preset debug
 cmake --build --preset test && ctest --preset test --output-on-failure
+# データ競合を見る
+cmake --preset tsan && cmake --build --preset tsan && ctest --preset tsan --output-on-failure
 ```
 
-`release` preset はサニタイザ無し。
+`release` preset はサニタイザ無し。macOS の Apple Clang の ASan には LeakSanitizer が無いので、
+macOS で見えるのは UAF まで。
 
 ## できること
 
@@ -71,8 +74,14 @@ app.post("/echo", [](hayate::Request &req) {
 app.group("/api/v1", [](hayate::Router &r) { r.get("/ping", ...); });
 ```
 
-`:name` が 1 セグメント、`*name` が残り全部。メソッド違いは 405（`Allow` 付き）、
-パス無しは 404。ハンドラは値を返しても `awaitable<Response>` を返してもよい。
+`:name` は空でない 1 セグメント、`*name` は残り全部（空でも可）で最後にだけ置ける。
+優先はセグメントごとに static > param > wildcard で、`/a` は `/a/*rest` に勝つ。
+同じメソッドで同じ形のルート（`/u/:id` と `/u/:name`）の二重登録、名前の無い `:` / `*`、途中の `*name`、
+GET / POST 以外は、登録時に `std::invalid_argument` を投げる。
+メソッド違いは 405（`Allow` 付き）、パス無しは 404。
+
+ハンドラは値を返しても `awaitable<Response>` を返してもよい。ただし const で呼べること
+（`mutable` ラムダはコンパイルエラー）。全接続で共有されるので、状態は App か Request の Extension に置く。
 
 ### Middleware
 
@@ -98,8 +107,12 @@ app.use(hayate::mw::rate_limit({.max = 60, .window = std::chrono::seconds(60)}))
 
 ```cpp
 app.get("/assets/*path", hayate::files("public"));
+// 配布上限 4 MiB、ワーカー 4 本、FS 待ちの上限 2 秒
+app.get("/dl/*path", hayate::files("downloads", 4u * 1024 * 1024, 4, std::chrono::seconds(2)));
 ```
 
+root の外・上限超過・無いファイル・通常ファイル以外は 404（存在を漏らさない）。
+FS 待ちが `fs_timeout`（既定 5 秒）を超えたら 503。
 ファイル I/O は `files()` が持つワーカープールで行い、io スレッドは filesystem を待たない。
 本体はサイズに関係なく 64 KiB ずつ送るので、1 応答のメモリはファイルサイズに依らない。
 `Content-Length` を立て、chunked encoding は使わない。
@@ -113,7 +126,7 @@ app.tls({.cert_file = "server.pem", .key_file = "server.key"})
 ```
 
 `tls()` を呼んだ App は全接続が TLS。TLS 1.1 以下は無効。
-読めない証明書・鍵は `tls()` の時点で投げる。
+読めない証明書・鍵と、証明書と対でない鍵は `tls()` の時点で投げる。
 
 ### JWT 検証（HS256）
 
@@ -164,16 +177,18 @@ app.limits({.max_body_bytes = 4u * 1024 * 1024, .max_connections = 4096});
 | `max_connections` | 1024 |
 
 超過は header 431 / body 413。タイムアウト切れは接続を閉じる。
-`stop()` は新規 accept を止め、in-flight を完了させてから io_context を止める。
+`stop()` は新規 accept を止め、要求を待っているだけの接続（keep-alive の次の要求待ちなど）はすぐ閉じ、
+ヘッダが揃った要求は完了させてから io_context を止める。TLS は停止中、close_notify の返事を待たない。
 
 ## 設計の約束
 
 - `std::expected` / C++ Modules / C++23 以降の必須機能は使わない
 - JSON は nlohmann 1 本。`hayate::Json` はその別名
 - `new` / `delete` / `malloc`、生配列を書かない
-- `Request` 配下は非所有 view。寿命は `Request`。view を `App` や `Response` に保存しない
-- 例外はハンドラ / Middleware の境界を出ない。Beast / Asio のエラーは `Error` に変換する
-- 共有可変グローバルを持たない。状態は `App` か `Request` の Extension
+- `Request` は要求の文字列を所有し、アクセサは view を返す。寿命は `Request`。view を `App` や `Response` に保存しない
+- 例外はハンドラ / Middleware の境界を出ない。Beast / Asio の失敗は、応答を書ける段階なら `Error` にして
+  応答する（413 / 431 / 500）。書けない段階（timeout・相手の切断・handshake 失敗）なら閉じるだけ
+- 共有可変グローバルを持たない。状態は `App` か `Request` の Extension、または Middleware / Handler の工場が持つ
 - 既存フレームワーク（Drogon / Crow / Oat++ / Cinatra / userver）のコードをコピーしない
 
 ## やらないこと
