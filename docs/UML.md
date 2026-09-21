@@ -296,8 +296,10 @@ sequenceDiagram
 - マクロで Route を登録しない
 - パスはセグメントに分けてから復号する。`param()` / `query()` は復号後、`path()` は生
 - `set_header` は token でない名前を捨て、値から CTL を落とす（ヘッダ注入を断つ）
-- 例外は Handler / Middleware の境界を出ない。Asio/Beast は Error に変換。
-  ハンドラの分は `dispatch_route`、MW の分は `dispatch` が受けて 500 にする
+- 例外は Handler / Middleware の境界を出ない。ハンドラの分は `dispatch_route`、MW の分は `dispatch` が
+  受けて 500 にする
+- Asio/Beast の失敗は、応答を書ける段階なら Error にして応答する（413 / 431 / 500）。書けない段階
+  （timeout・相手の切断・handshake 失敗）なら閉じるだけで、受け取る側のない Error は作らない
 - `std::expected` 禁止。`Result<T>` は 1 実装
 - Request の view を Response や App に保存しない
 - 共有可変グローバルを置かない。状態は App か Request の Extension

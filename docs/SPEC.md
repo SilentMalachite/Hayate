@@ -228,6 +228,8 @@ App の `use()` は 404/405 を含む dispatch 全体を包む（CORS preflight 
 
 超過: header 431、body 413。read/write/idle 切れは接続を閉じる（応答を書けなければ書かない）。`max_connections` 超過の新規は accept せず切る。
 
+Beast / Asio の失敗は、応答を書ける段階なら `Error` にして応答する（413 / 431 / 500）。書けない段階（timeout・相手の切断・handshake 失敗）なら閉じるだけで、受け取る側のない `Error` は作らない。
+
 窓の切り分け: 1 本目のヘッダ読みは `read_timeout`。keep-alive で次の要求のヘッダを待つ間は `idle_timeout`。ヘッダが揃った後の本文読みは何本目でも `read_timeout`。
 
 HTTP/1.1 の約束:

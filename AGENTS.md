@@ -33,6 +33,7 @@ Claude Code 用の `CLAUDE.md` より短いのは意図的。写しにしない�
 - JSON は 1 本（glaze 優先、なければ nlohmann）。
 - Request の view を Request より長く持たない。
 - 例外は境界を出ない。`new`/`delete` 禁止。神オブジェクト禁止。
+- Beast/Asio の失敗は、応答を書けるなら `Error` にして応答（413 / 431 / 500）。書けないなら閉じる。受け手のない `Error` は作らない。
 - Drogon / Crow / Oat++ / Cinatra / userver をコピーしない。
 - 図に無い型を足さない。
 
