@@ -225,8 +225,8 @@ TEST(Limits, WriteTimeoutClosesStalledReader) {
     const auto ec =
         c.run(std::chrono::seconds(5), [&]() -> net::awaitable<boost::system::error_code> {
             for (;;) {
-                auto [rec, n] =
-                    co_await c.stream().async_read_some(net::buffer(chunk), net::as_tuple);
+                auto [rec, n] = co_await c.stream().async_read_some(
+                    net::buffer(chunk), net::as_tuple(net::use_awaitable));
                 total += n;
                 if (rec) {
                     co_return rec;

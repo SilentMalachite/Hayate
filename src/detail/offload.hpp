@@ -48,7 +48,7 @@ offload_until(net::thread_pool &pool, std::chrono::milliseconds limit, F f) {
             st->gate.cancel();
         });
     });
-    auto [ec] = co_await st->gate.async_wait(net::as_tuple);
+    auto [ec] = co_await st->gate.async_wait(net::as_tuple(net::use_awaitable));
     (void)ec;
     co_return std::move(st->value);
 }

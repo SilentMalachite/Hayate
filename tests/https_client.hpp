@@ -38,32 +38,34 @@ inline HttpCall https_call(std::string host, std::uint16_t port, boost::beast::h
             ioc,
             [&]() -> net::awaitable<void> {
                 beast::get_lowest_layer(stream).expires_after(timeout);
-                auto [cec] =
-                    co_await beast::get_lowest_layer(stream).async_connect(ep, net::as_tuple);
+                auto [cec] = co_await beast::get_lowest_layer(stream).async_connect(
+                    ep, net::as_tuple(net::use_awaitable));
                 if (cec) {
                     failed = cec;
                     co_return;
                 }
-                auto [hec] =
-                    co_await stream.async_handshake(net::ssl::stream_base::client, net::as_tuple);
+                auto [hec] = co_await stream.async_handshake(net::ssl::stream_base::client,
+                                                             net::as_tuple(net::use_awaitable));
                 if (hec) {
                     failed = hec;
                     co_return;
                 }
-                auto [wec, wn] = co_await http::async_write(stream, req, net::as_tuple);
+                auto [wec, wn] =
+                    co_await http::async_write(stream, req, net::as_tuple(net::use_awaitable));
                 (void)wn;
                 if (wec) {
                     failed = wec;
                     co_return;
                 }
-                auto [rec, rn] = co_await http::async_read(stream, buf, res, net::as_tuple);
+                auto [rec, rn] =
+                    co_await http::async_read(stream, buf, res, net::as_tuple(net::use_awaitable));
                 (void)rn;
                 if (rec) {
                     failed = rec;
                     co_return;
                 }
                 // close_notify を送る。サーバーが相手の close_notify を待ち続けないように。
-                auto [sec] = co_await stream.async_shutdown(net::as_tuple);
+                auto [sec] = co_await stream.async_shutdown(net::as_tuple(net::use_awaitable));
                 (void)sec;
             },
             net::detached);

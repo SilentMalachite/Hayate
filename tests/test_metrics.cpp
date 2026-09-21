@@ -90,8 +90,8 @@ TEST(Metrics, RejectedOverMaxConnections) {
         std::array<char, 16> sink{};
         const auto ec =
             b.run(std::chrono::seconds(2), [&]() -> net::awaitable<boost::system::error_code> {
-                auto [rec, n] =
-                    co_await b.stream().async_read_some(net::buffer(sink), net::as_tuple);
+                auto [rec, n] = co_await b.stream().async_read_some(
+                    net::buffer(sink), net::as_tuple(net::use_awaitable));
                 (void)n;
                 co_return rec;
             });

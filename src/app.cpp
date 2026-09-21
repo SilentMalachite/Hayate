@@ -119,7 +119,8 @@ boost::asio::awaitable<void> App::run() {
         // 接続ごとに strand を 1 本。socket をそれに束縛して accept するので、
         // stream の読み書きも内部タイマーも同じ strand 上で直列に走る。
         net::any_io_executor conn_ex(net::make_strand(impl_->ioc));
-        auto [ec, sock] = co_await impl_->acceptor->async_accept(conn_ex, net::as_tuple);
+        auto [ec, sock] =
+            co_await impl_->acceptor->async_accept(conn_ex, net::as_tuple(net::use_awaitable));
         if (ec) {
             if (!impl_->accepting.load() || ec == net::error::operation_aborted ||
                 !impl_->acceptor->is_open()) {
@@ -127,7 +128,7 @@ boost::asio::awaitable<void> App::run() {
             }
             // fd 枯渇などで終えると、負荷が引いた後も誰も繋げない。すぐ再試行すると空回りする。
             impl_->accept_retry.expires_after(accept_retry_delay);
-            co_await impl_->accept_retry.async_wait(net::as_tuple);
+            co_await impl_->accept_retry.async_wait(net::as_tuple(net::use_awaitable));
             continue;
         }
         const auto n = impl_->connections.fetch_add(1) + 1;
