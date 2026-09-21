@@ -225,6 +225,9 @@ App の `use()` は 404/405 を含む dispatch 全体を包む（CORS preflight 
   何度呼んでもよく、効果は 1 回分
 - `serve()` は `threads(n)`（既定 1）で io_context を blocking 実行する。SIGINT/SIGTERM で `stop()`
 - `stop()` は新規 accept を止め、in-flight の読書きを完了させてから io_context を止める
+- 要求の到着を待っている接続（TLS ハンドシェイク中、1 本目のヘッダ待ち、keep-alive の次のヘッダ待ち）は
+  `stop()` ですぐ閉じる。ヘッダが途中まで来ていても閉じる（要求はまだ完成していない）。ヘッダが揃った
+  要求（本文の読み・ハンドラ・書き込み）は完了させ、`Connection: close` で閉じる
 
 ### Limits 既定
 
@@ -296,7 +299,8 @@ app.tls({.cert_file = "server.pem", .key_file = "server.key"})
 - 証明書 / 鍵が読めない、または鍵が証明書と対でなければ `tls()` が投げる（`bind()` と同じく設定時に落とす）
 - `key_password` が空なら鍵にパスフレーズ無しとして扱う
 - ハンドシェイクの窓は `read_timeout`。失敗した接続は応答を書かずに閉じる
-- 終了は TLS shutdown → socket shutdown の順。相手の close_notify を待つのは `write_timeout` まで
+- 終了は TLS shutdown → socket shutdown の順。相手の close_notify を待つのは `write_timeout` まで。
+  停止中は close_notify を送るだけで返事を待たない（RFC 8446 §6.1。待つと `serve()` が戻らない）
 - sslv2 / sslv3 / tlsv1 / tlsv1.1 を無効化する。最低 TLS 1.2
 - `Request::peer()` は TLS でも accept 時の remote IP
 
