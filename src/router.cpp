@@ -72,22 +72,19 @@ std::vector<Seg> parse_pattern(std::string_view pattern) {
 }
 
 std::string join_prefix(std::string_view prefix, std::string_view path) {
-    if (prefix.empty()) {
-        return std::string(path);
+    std::string joined(prefix);
+    if (!prefix.empty() && !path.empty() && prefix.back() != '/' && path.front() != '/') {
+        joined.push_back('/');
     }
-    if (path.empty()) {
-        return std::string(prefix);
-    }
+    joined.append(path);
+    // 継ぎ目だけ見ると prefix 内の `//` が残る。全体で畳む。
     std::string out;
-    out.reserve(prefix.size() + path.size() + 1);
-    out.append(prefix);
-    if (out.back() == '/' && path.front() == '/') {
-        out.append(path.substr(1));
-    } else if (out.back() != '/' && path.front() != '/') {
-        out.push_back('/');
-        out.append(path);
-    } else {
-        out.append(path);
+    out.reserve(joined.size());
+    for (const char c : joined) {
+        if (c == '/' && !out.empty() && out.back() == '/') {
+            continue;
+        }
+        out.push_back(c);
     }
     return out;
 }
@@ -238,12 +235,13 @@ std::vector<std::pair<HttpMethod, std::string>> Router::route_table() const {
 }
 
 boost::asio::awaitable<Response> Router::dispatch(Request &req) const {
-    Handler inner = [this](Request &r) -> boost::asio::awaitable<Response> {
-        co_return co_await dispatch_route(r);
-    };
-    Handler h = compose(impl_->mws, std::move(inner));
     // 中の catch はハンドラだけを守る。MW 自身が投げた分はここで受けないと接続が落ちる。
+    // 合成も MW をコピーするので投げうる。try の中に置く。
     try {
+        Handler inner = [this](Request &r) -> boost::asio::awaitable<Response> {
+            co_return co_await dispatch_route(r);
+        };
+        Handler h = compose(impl_->mws, std::move(inner));
         co_return co_await h(req);
     } catch (...) {
         co_return internal_error();

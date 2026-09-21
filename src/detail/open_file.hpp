@@ -6,6 +6,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <filesystem>
 #include <memory>
@@ -30,15 +31,11 @@ struct OpenedFile {
     std::uint64_t size{0};
 };
 
-// cand が root と同じか、その下にあるか。文字列前置ではなく区切りまで見る。
+// cand が root と同じか、その下にあるか。文字列前置ではなくパス要素で比べる。
+// 「root の直後が区切りか」で見ると、root が `/` のとき配下が全部外れる。
 inline bool contained(const fs::path &root, const fs::path &cand) {
-    const auto r = root.native();
-    const auto c = cand.native();
-    if (c == r) {
-        return true;
-    }
-    const auto sep = static_cast<fs::path::value_type>(fs::path::preferred_separator);
-    return c.size() > r.size() && c.compare(0, r.size(), r) == 0 && c[r.size()] == sep;
+    const auto [r, c] = std::mismatch(root.begin(), root.end(), cand.begin(), cand.end());
+    return r == root.end();
 }
 
 // 開いた fd 自身の実パス。パス名から辿り直さないための確認に使う。

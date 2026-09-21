@@ -1,4 +1,5 @@
 #include "http_client.hpp"
+#include "temp_dir.hpp"
 #include "test_server.hpp"
 
 #include <hayate/hayate.hpp>
@@ -19,27 +20,8 @@
 namespace http = boost::beast::http;
 namespace fs = std::filesystem;
 
-namespace {
-
-struct StaticDir {
-    fs::path dir;
-    StaticDir() {
-        dir =
-            fs::temp_directory_path() /
-            ("hayate_static_" + std::to_string(std::hash<std::string>{}(
-                                    __FILE__ + std::to_string(reinterpret_cast<uintptr_t>(this)))));
-        fs::create_directories(dir);
-    }
-    ~StaticDir() {
-        std::error_code ec;
-        fs::remove_all(dir, ec);
-    }
-};
-
-} // namespace
-
 TEST(Static, ServesExistingFile) {
-    StaticDir root;
+    TempDir root;
     {
         std::ofstream out(root.dir / "hello.txt");
         out << "hi";
@@ -53,7 +35,7 @@ TEST(Static, ServesExistingFile) {
 }
 
 TEST(Static, MissingIs404) {
-    StaticDir root;
+    TempDir root;
     TestServer srv(
         [&](hayate::App &app) { app.get("/assets/*path", hayate::files(root.dir.string())); });
     auto r = http_call("127.0.0.1", srv.port(), http::verb::get, "/assets/nope.txt");
@@ -61,7 +43,7 @@ TEST(Static, MissingIs404) {
 }
 
 TEST(Static, PathTraversalIs404) {
-    StaticDir root;
+    TempDir root;
     const auto secret = root.dir.parent_path() / ("hayate_secret_" + root.dir.filename().string());
     {
         std::ofstream out(secret);
@@ -78,7 +60,7 @@ TEST(Static, PathTraversalIs404) {
 
 // root 内の symlink が root 外を指すなら、存在を漏らさず 404。
 TEST(Static, SymlinkEscapingRootIs404) {
-    StaticDir root;
+    TempDir root;
     const auto secret = root.dir.parent_path() / ("hayate_secret_" + root.dir.filename().string());
     {
         std::ofstream out(secret);
@@ -99,7 +81,7 @@ TEST(Static, SymlinkEscapingRootIs404) {
 // 検査を通ったファイルが、送出前に root 外への symlink へ差し替えられても、
 // 送るのは検査したバイト列であること。
 TEST(Static, SwapAfterStatStillServesVerifiedBytes) {
-    StaticDir root;
+    TempDir root;
     const auto secret = root.dir.parent_path() / ("hayate_secret_" + root.dir.filename().string());
     {
         std::ofstream out(secret);
@@ -145,7 +127,7 @@ TEST(Static, SwapAfterStatStillServesVerifiedBytes) {
 
 // FIFO は通常ファイルではない。書き手が居なくても待たされずに 404。
 TEST(Static, FifoIsNotServedAndDoesNotHang) {
-    StaticDir root;
+    TempDir root;
     const auto fifo = root.dir / "pipe";
     ASSERT_EQ(::mkfifo(fifo.c_str(), 0600), 0);
     TestServer srv(
@@ -158,7 +140,7 @@ TEST(Static, FifoIsNotServedAndDoesNotHang) {
 }
 
 TEST(Static, IndexHtml) {
-    StaticDir root;
+    TempDir root;
     {
         std::ofstream out(root.dir / "index.html");
         out << "<h1>ok</h1>";
@@ -172,7 +154,7 @@ TEST(Static, IndexHtml) {
 }
 
 TEST(Static, HtmlContentType) {
-    StaticDir root;
+    TempDir root;
     {
         std::ofstream out(root.dir / "page.html");
         out << "<p>x</p>";
@@ -185,7 +167,7 @@ TEST(Static, HtmlContentType) {
 }
 
 TEST(Static, OversizeFileIs404) {
-    StaticDir root;
+    TempDir root;
     {
         std::ofstream out(root.dir / "big.txt");
         out << std::string(64, 'x');
@@ -197,7 +179,7 @@ TEST(Static, OversizeFileIs404) {
 }
 
 TEST(Static, UnderLimitFileIsServed) {
-    StaticDir root;
+    TempDir root;
     {
         std::ofstream out(root.dir / "small.txt");
         out << "hi";
@@ -211,7 +193,7 @@ TEST(Static, UnderLimitFileIsServed) {
 
 TEST(Static, TrailingSlashRootCreatedLater) {
     // 登録時に root が無いと weakly_canonical が末尾 / を残す。それでも配れること。
-    StaticDir parent;
+    TempDir parent;
     const auto late = parent.dir / "late";
     TestServer srv(
         [&](hayate::App &app) { app.get("/assets/*path", hayate::files(late.string() + "/")); });
@@ -228,7 +210,7 @@ TEST(Static, TrailingSlashRootCreatedLater) {
 // 未作成の相対 root が相対のまま残ると、後で作っても候補（絶対パス）が root 外扱いになる。
 // libstdc++ の weakly_canonical で起きる。libc++ では今も通る（回帰の檻）。
 TEST(Static, RelativeRootCreatedLater) {
-    StaticDir base;
+    TempDir base;
     struct CwdGuard {
         fs::path saved = fs::current_path();
         ~CwdGuard() {
@@ -248,8 +230,22 @@ TEST(Static, RelativeRootCreatedLater) {
     EXPECT_EQ(r.body, "late");
 }
 
+// 包含判定が「root の直後が区切りか」だと、root が `/` のときに配下が全部外れる。
+TEST(Static, RootSlashServesDescendant) {
+    TempDir base;
+    {
+        std::ofstream out(base.dir / "a.txt");
+        out << "root";
+    }
+    const auto abs = fs::canonical(base.dir / "a.txt").string();
+    TestServer srv([](hayate::App &app) { app.get("/assets/*path", hayate::files("/")); });
+    auto r = http_call("127.0.0.1", srv.port(), http::verb::get, "/assets" + abs);
+    EXPECT_EQ(r.status, 200);
+    EXPECT_EQ(r.body, "root");
+}
+
 TEST(Static, PercentEncodedFileName) {
-    StaticDir root;
+    TempDir root;
     {
         std::ofstream out(root.dir / "my file.txt");
         out << "hi";
@@ -262,7 +258,7 @@ TEST(Static, PercentEncodedFileName) {
 }
 
 TEST(Static, EncodedTraversalIs404) {
-    StaticDir root;
+    TempDir root;
     const auto secret = root.dir.parent_path() / ("hayate_secret_" + root.dir.filename().string());
     {
         std::ofstream out(secret);
@@ -278,7 +274,7 @@ TEST(Static, EncodedTraversalIs404) {
 }
 
 TEST(Static, NulInPathIs404) {
-    StaticDir root;
+    TempDir root;
     {
         std::ofstream out(root.dir / "hello.txt");
         out << "hi";
@@ -290,7 +286,7 @@ TEST(Static, NulInPathIs404) {
 }
 
 TEST(Static, LargeFileIsStreamedWhole) {
-    StaticDir root;
+    TempDir root;
     // 64 KiB チャンクを 3 本 + 端数。ループが複数回まわる大きさ。
     std::string want;
     want.reserve(200 * 1024);
@@ -313,7 +309,7 @@ TEST(Static, LargeFileIsStreamedWhole) {
 }
 
 TEST(Static, EmptyFileIsServed) {
-    StaticDir root;
+    TempDir root;
     {
         std::ofstream out(root.dir / "empty.txt", std::ios::binary);
     }
@@ -327,7 +323,7 @@ TEST(Static, EmptyFileIsServed) {
 }
 
 TEST(Static, DefaultHasNoSizeCap) {
-    StaticDir root;
+    TempDir root;
     // 旧既定（1 MiB）なら 404 になっていた大きさ。
     const std::string want(2 * 1024 * 1024, 'x');
     {
@@ -343,7 +339,7 @@ TEST(Static, DefaultHasNoSizeCap) {
 }
 
 TEST(Static, KeepAliveAfterStreamedFile) {
-    StaticDir root;
+    TempDir root;
     const std::string big(200 * 1024, 'y');
     {
         std::ofstream out(root.dir / "big.bin", std::ios::binary);

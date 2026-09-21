@@ -102,6 +102,18 @@ TEST(Router, GroupPrefix) {
     EXPECT_EQ(r.body, "ok");
 }
 
+// 継ぎ目だけ見ると prefix 内の `//` が残り、`/api//v1/ping` で登録される。
+TEST(Router, GroupCollapsesDoubleSlash) {
+    TestServer srv([](hayate::App &app) {
+        app.group("/api//v1", [](hayate::Router &r) {
+            r.get("/ping", [](hayate::Request &) { return hayate::Response::text("ok"); });
+        });
+    });
+    auto r = http_call("127.0.0.1", srv.port(), http::verb::get, "/api/v1/ping");
+    EXPECT_EQ(r.status, 200);
+    EXPECT_EQ(r.body, "ok");
+}
+
 TEST(Router, QueryValue) {
     TestServer srv([](hayate::App &app) {
         app.get("/q", [](hayate::Request &req) {

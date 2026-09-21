@@ -118,7 +118,8 @@ Phase 3（metrics）
 ## 技術判断
 
 - 言語: C++20 厳守。`std::expected` は使わない
-- ビルド: CMake 3.28+、Presets `debug` / `release` / `test`。ASan は debug の既定
+- ビルド: CMake 3.28+、Presets `debug` / `release` / `test`。ASan は debug の既定。
+  `test` は `debug` と同じビルドディレクトリ（`--preset debug` の直後に `--build --preset test` が通る）
 - 対象: macOS (Apple Clang) と Linux (GCC 12+ / Clang 16+)。Windows は後追い
 - I/O: Boost.Asio 1.83+。`asio::awaitable` / `co_spawn`。公開ヘッダで `namespace asio = boost::asio;`
 - ファイル I/O: ブロッキング FS 呼び出しは `asio::thread_pool` に逃がす。`asio::stream_file` は `BOOST_ASIO_HAS_FILE`（Windows ハンドル / Linux io_uring）依存で macOS に無いため使わない
@@ -192,7 +193,7 @@ App の `use()` は 404/405 を含む dispatch 全体を包む（CORS preflight 
 - 欠けた param / query / header は空 `string_view`
 - 一致優先: 各セグメントで static > param > wildcard。全セグメント同点なら先に登録した方
 - パス無し 404。パスはあるがメソッド違い 405 + `Allow`
-- `group(prefix, fn)` は接頭辞連結。`//` を `/` に正規化する。末尾 `/` は消さない
+- `group(prefix, fn)` は接頭辞連結。連結した全体で、連続する `/` を 1 つに畳む。末尾 `/` は消さない
 - `/a` と `/a/` は別ルート
 - パスはセグメントに分けてからパーセントデコードする。`%2F` は区切りにせずセグメント内の `/` になる
 - query はパーセントデコードし、`+` は空白として読む
@@ -238,6 +239,8 @@ HTTP/1.1 の約束:
 - 接続を続けるかは「サーバーの判断」かつ「応答の `Connection`」。ハンドラが `Connection: close` を
   付ければ閉じる。サーバーが閉じると決めたら（要求が close、停止中など）、ハンドラの keep-alive は
   無視して `Connection: close` を送る。送ったヘッダと実際の挙動を食い違わせない
+- 1xx / 204 / 304 の応答は本文を持たない。ハンドラの本文は捨て、`Content-Length` /
+  `Transfer-Encoding` は付けない（RFC 9110 §8.6、§6.4.1）
 
 ### JSON
 
@@ -296,6 +299,8 @@ app.get("/openapi.json", [&app](hayate::Request &) {
   **body / response のスキーマは出さない**（Router が型情報を持っていない）
 - `:name` → `{name}`、`*name` → `{name}` + `x-hayate-wildcard: true`
   （OpenAPI の `{}` は本来 `/` を含まないので、違いを機械可読な形で残す）
+- 静的セグメントは RFC 3986 の pchar 以外（`{` `}` `%` を含む）を percent-encode する。
+  静的な `{id}` がテンプレート変数に化けず、`/a/{}` と `/a/:x` が同じ形にまとまらない
 - path パラメータは `in: path` / `required: true` / `schema: {type: string}`
 - 同じパスの GET と POST は 1 つの path 項目にまとまる
 - 形が同じでパラメータ名だけ違うパス（`/users/:id` と `/users/:name`）も 1 つにまとめる。
@@ -390,6 +395,7 @@ app.get("/assets/*path", hayate::files("public", 4u * 1024 * 1024, 4));
 - 相対パスの root は登録時のカレントディレクトリで絶対パスに解決する（未作成でも）
 - wildcard 名は `path`。空なら `index.html`
 - root の外（`..` / 絶対パス）は 404（存在を漏らさない）
+- root 内かはパス要素単位で判定する。root が `/` でも配下を配る
 - 復号後のパスに NUL が入っていたら 404
 - 無いファイル・ディレクトリで `index.html` も無いときは 404
 - ディレクトリで `index.html` があればそれを返す

@@ -4,8 +4,11 @@
 #include <gtest/gtest.h>
 #include <hayate/hayate.hpp>
 
+#include <atomic>
+#include <memory>
 #include <stdexcept>
 #include <string>
+#include <utility>
 
 namespace http = boost::beast::http;
 
@@ -111,6 +114,39 @@ TEST(Mw, ThrowingHandlerIs500) {
         app.get("/",
                 [](hayate::Request &) -> hayate::Response { throw std::runtime_error("boom"); });
     });
+    auto r = http_call("127.0.0.1", srv.port(), http::verb::get, "/");
+    EXPECT_FALSE(r.error);
+    EXPECT_EQ(r.status, 500);
+}
+
+namespace {
+
+// dispatch は要求ごとに MW を合成し直し、そこでコピーする。立てた後のコピーで投げる。
+struct ThrowOnCopy {
+    std::shared_ptr<std::atomic<bool>> armed;
+
+    explicit ThrowOnCopy(std::shared_ptr<std::atomic<bool>> a) : armed(std::move(a)) {}
+    ThrowOnCopy(const ThrowOnCopy &o) : armed(o.armed) {
+        if (armed->load()) {
+            throw std::runtime_error("copy");
+        }
+    }
+    ThrowOnCopy(ThrowOnCopy &&) = default;
+
+    asio::awaitable<hayate::Response> operator()(hayate::Request &req, hayate::Next next) const {
+        co_return co_await next(req);
+    }
+};
+
+} // namespace
+
+TEST(Mw, CopyThrowIs500) {
+    auto armed = std::make_shared<std::atomic<bool>>(false);
+    TestServer srv([&](hayate::App &app) {
+        app.use(ThrowOnCopy{armed});
+        app.get("/", [](hayate::Request &) { return hayate::Response::text("ok"); });
+    });
+    armed->store(true);
     auto r = http_call("127.0.0.1", srv.port(), http::verb::get, "/");
     EXPECT_FALSE(r.error);
     EXPECT_EQ(r.status, 500);

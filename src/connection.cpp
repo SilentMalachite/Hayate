@@ -72,11 +72,23 @@ bool expects_continue(const http::request<http::string_body> &req) {
     return detail::iequals(req[http::field::expect], "100-continue");
 }
 
+// 本文を持てないステータス。prepare_payload() は 204 に Content-Length: 0 を付け、
+// 本文があれば投げる（応答を書けずに接続ごと落ちる）ので、通さない。
+bool bodiless(http::status s) {
+    return http::to_status_class(s) == http::status_class::informational ||
+           s == http::status::no_content || s == http::status::not_modified;
+}
+
 http::response<http::string_body> to_beast(const Response &src, unsigned version, bool keep_alive) {
     http::response<http::string_body> out{http::status(src.status()), version};
     out.keep_alive(keep_alive);
     src.for_each_header([&](std::string_view k, std::string_view v) { out.set(k, v); });
     settle_keep_alive(out, keep_alive);
+    if (bodiless(out.result())) {
+        out.erase(http::field::content_length);
+        out.erase(http::field::transfer_encoding);
+        return out;
+    }
     out.body() = std::string(src.body());
     out.prepare_payload();
     return out;

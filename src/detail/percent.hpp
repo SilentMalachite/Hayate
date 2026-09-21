@@ -44,4 +44,26 @@ inline std::string percent_decode(std::string_view in, bool plus_as_space) {
     return out;
 }
 
+// RFC 3986 の pchar（unreserved / sub-delims / ":" / "@"）以外を %XX にする。
+// `%` 自身も符号化するので、復号すると元に戻る。
+inline std::string percent_encode_pchar(std::string_view in) {
+    static constexpr std::string_view keep = "-._~!$&'()*+,;=:@";
+    static constexpr std::string_view hex = "0123456789ABCDEF";
+    std::string out;
+    out.reserve(in.size());
+    for (const char c : in) {
+        const auto b = static_cast<unsigned char>(c);
+        const bool alnum =
+            (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9');
+        if (alnum || keep.find(c) != std::string_view::npos) {
+            out.push_back(c);
+            continue;
+        }
+        out.push_back('%');
+        out.push_back(hex[b >> 4]);
+        out.push_back(hex[b & 0x0f]);
+    }
+    return out;
+}
+
 } // namespace hayate::detail
