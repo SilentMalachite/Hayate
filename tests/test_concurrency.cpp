@@ -9,6 +9,7 @@
 #include <gtest/gtest.h>
 
 #include <atomic>
+#include <chrono>
 #include <csignal>
 #include <cstdint>
 #include <future>
@@ -216,4 +217,22 @@ TEST(Concurrency, SigtermDuringStop) {
     by_signal.join();
     by_call.join();
     srv.reset();
+}
+
+// SIGTERM だけで stop() が走る（SPEC: serve() は SIGINT/SIGTERM で stop()）。止まったことは、
+// acceptor が閉じて新しい接続が拒否されることで見る。
+TEST(Concurrency, SigtermAloneStops) {
+    TestServer srv([](hayate::App &app) {
+        app.get("/", [](hayate::Request &) { return hayate::Response::text("ok"); });
+    });
+    // signal_set は accept ループより先に入る。1 本通れば SIGTERM で落ちない。
+    ASSERT_EQ(http_call("127.0.0.1", srv.port(), http::verb::get, "/").status, 200);
+    ::raise(SIGTERM);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    bool refused = false;
+    while (!refused && std::chrono::steady_clock::now() < deadline) {
+        Conn probe(srv.port(), std::chrono::milliseconds(200));
+        refused = static_cast<bool>(probe.connect_error());
+    }
+    EXPECT_TRUE(refused) << "SIGTERM did not stop the server";
 }

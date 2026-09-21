@@ -554,3 +554,28 @@ TEST(Jwt, BearerSchemeIsCaseInsensitive) {
         EXPECT_EQ(r.body, "alice") << scheme;
     }
 }
+
+// スキームの後は空白。"Bearerx" や "Bearer\t" はスキームとして読まない。
+TEST(Jwt, SchemeWithoutSpaceIs401) {
+    TestServer srv([](hayate::App &app) { protect(app, base_cfg()); });
+    const auto tok = make_token(hs256_header(),
+                                Json::object({{"sub", "alice"}, {"exp", now_s() + 300}}), kSecret);
+    for (const std::string value : {"Bearer" + tok, "Bearer\t" + tok}) {
+        auto r = http_call("127.0.0.1", srv.port(), http::verb::get, "/me", {}, {},
+                           std::chrono::seconds(2), {{"Authorization", value}});
+        EXPECT_EQ(r.status, 401);
+    }
+}
+
+// aud は文字列か、文字列を含む配列。含まない配列と、それ以外の型は 401。
+TEST(Jwt, AudienceArrayWithoutMatchIs401) {
+    auto cfg = base_cfg();
+    cfg.audience = "api";
+    TestServer srv([&](hayate::App &app) { protect(app, cfg); });
+    for (const auto &aud : {Json::array({"web", "admin"}), Json::array({7}), Json(7)}) {
+        const auto tok =
+            make_token(hs256_header(),
+                       Json::object({{"sub", "a"}, {"exp", now_s() + 300}, {"aud", aud}}), kSecret);
+        EXPECT_EQ(call(srv.port(), tok).status, 401) << aud.dump();
+    }
+}

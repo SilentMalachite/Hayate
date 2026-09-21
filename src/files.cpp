@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 
@@ -46,15 +47,24 @@ std::string mime_type(const fs::path &p) {
     return "application/octet-stream";
 }
 
+// 開いて確かめたファイル。Response は io 側で組む。
+struct Found {
+    fs::path path;
+    std::uint64_t size{0};
+    std::shared_ptr<detail::OpenFile> file;
+};
+
 // ここは io スレッドではなくワーカープールで走る。例外を投げない（境界を越えさせない）。
-// バイトは読まない。どこを読めばよいかだけを Response に載せて Connection に渡す。
-Response stat_blocking(const fs::path &root, const std::string &raw, std::uint64_t max_bytes,
-                       std::shared_ptr<net::thread_pool> pool) {
+// バイトは読まない。どこを読めばよいかだけを返す。空は 404。
+// プールは受け取らない。期限切れで置いていった仕事がプールを持つと、プールが App より長く生き、
+// 完了を壊れた io_context に post する。
+std::optional<Found> stat_blocking(const fs::path &root, const std::string &raw,
+                                   std::uint64_t max_bytes) {
     const fs::path rel{raw};
     std::error_code ec;
     auto target = fs::weakly_canonical(root / rel, ec);
     if (ec || !contained(root, target)) {
-        return not_found();
+        return std::nullopt;
     }
     std::error_code dir_ec;
     if (rel.empty() || fs::is_directory(target, dir_ec)) {
@@ -63,22 +73,19 @@ Response stat_blocking(const fs::path &root, const std::string &raw, std::uint64
     std::error_code canon_ec;
     const auto resolved = fs::weakly_canonical(target, canon_ec);
     if (canon_ec || !contained(root, resolved)) {
-        return not_found();
+        return std::nullopt;
     }
     // ここで開き切る。判定した fd をそのまま送るので、送出までの間に
     // symlink を差し替えられても効かない。種別・サイズも fd から取る。
     auto opened = detail::open_verified(root, resolved);
     if (!opened) {
-        return not_found();
+        return std::nullopt;
     }
     // max_bytes は配布上限。0 は無制限。メモリはサイズに依らず一定。
     if (max_bytes != 0 && opened->size > max_bytes) {
-        return not_found();
+        return std::nullopt;
     }
-    auto res = Response::file(
-        {std::move(resolved), opened->size, std::move(pool), std::move(opened->file)});
-    res.set_header("Content-Type", mime_type(res.file_source()->path));
-    return res;
+    return Found{resolved, opened->size, std::move(opened->file)};
 }
 
 } // namespace
@@ -95,14 +102,19 @@ Handler detail::files_on(fs::path root, std::uint64_t max_bytes,
             co_return not_found();
         }
         // FS が返らない・プールが詰まっているときに接続を抱えない。
-        auto res =
-            co_await detail::offload_until(*pool, fs_timeout, [root_path, raw, max_bytes, pool] {
-                return stat_blocking(root_path, raw, max_bytes, pool);
-            });
-        if (!res) {
+        auto got = co_await detail::offload_until(*pool, fs_timeout, [root_path, raw, max_bytes] {
+            return stat_blocking(root_path, raw, max_bytes);
+        });
+        if (!got) {
             co_return unavailable();
         }
-        co_return std::move(*res);
+        if (!*got) {
+            co_return not_found();
+        }
+        auto &found = **got;
+        auto res = Response::file({std::move(found.path), found.size, pool, std::move(found.file)});
+        res.set_header("Content-Type", mime_type(res.file_source()->path));
+        co_return res;
     };
 }
 

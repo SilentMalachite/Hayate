@@ -90,10 +90,10 @@ App &App::tls(Tls cfg) {
     ctx->set_options(ssl::context::default_workarounds | ssl::context::no_sslv2 |
                      ssl::context::no_sslv3 | ssl::context::no_tlsv1 | ssl::context::no_tlsv1_1 |
                      ssl::context::single_dh_use);
-    if (!cfg.key_password.empty()) {
-        ctx->set_password_callback(
-            [pw = cfg.key_password](std::size_t, ssl::context::password_purpose) { return pw; });
-    }
+    // 空でも設定する。無いと OpenSSL の既定が端末でパスフレーズを尋ね、tls() が止まる。
+    // 空を返せば、暗号化された鍵は読めずに投げる。
+    ctx->set_password_callback(
+        [pw = cfg.key_password](std::size_t, ssl::context::password_purpose) { return pw; });
     // 読めない証明書・鍵はここで投げる。bind() と同じく設定時に落とす。
     ctx->use_certificate_chain_file(cfg.cert_file);
     ctx->use_private_key_file(cfg.key_file, ssl::context::pem);

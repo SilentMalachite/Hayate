@@ -328,3 +328,12 @@ TEST(Tls, PeerIsRemoteIp) {
     EXPECT_EQ(r.status, 200) << r.error_message;
     EXPECT_EQ(r.body, "127.0.0.1");
 }
+
+// key_password が空なら、パスフレーズ無しとして扱う。OpenSSL の既定は端末で尋ねるので、
+// 端末から起動すると tls() が入力待ちで止まる。
+TEST(Tls, EncryptedKeyWithoutPasswordThrows) {
+    TempCert cert(TempCert::Key::ec, "s3cret");
+    hayate::App app;
+    EXPECT_THROW(app.tls({.cert_file = cert.cert().string(), .key_file = cert.key().string()}),
+                 std::exception);
+}

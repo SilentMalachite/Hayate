@@ -356,3 +356,60 @@ TEST(Router, TrailingSlashIsDistinct) {
     EXPECT_EQ(api.body, "api");
     EXPECT_EQ(http_call("127.0.0.1", srv.port(), http::verb::get, "/api").status, 404);
 }
+
+// 組は & で分ける。= の無いキーは空の値。16 進は小文字でもよい。
+TEST(Router, QueryPairs) {
+    TestServer srv([](hayate::App &app) {
+        app.get("/q", [](hayate::Request &req) {
+            std::string out;
+            for (const char *k : {"a", "b", "flag", "c", "missing"}) {
+                out += std::string(req.query(k)) + "|";
+            }
+            return hayate::Response::text(out);
+        });
+    });
+    auto r =
+        http_call("127.0.0.1", srv.port(), http::verb::get, "/q?a=1&b=x+y%2f&flag&c=%e3%81%82");
+    EXPECT_EQ(r.status, 200);
+    EXPECT_EQ(r.body, "1|x y/||\xe3\x81\x82||");
+}
+
+TEST(Router, LowercasePercentInPath) {
+    TestServer srv([](hayate::App &app) {
+        app.get("/u/:id", [](hayate::Request &req) {
+            return hayate::Response::text(std::string(req.param("id")));
+        });
+    });
+    auto r = http_call("127.0.0.1", srv.port(), http::verb::get, "/u/%e3%81%82%2f");
+    EXPECT_EQ(r.status, 200);
+    EXPECT_EQ(r.body, "\xe3\x81\x82/");
+}
+
+// target() は query を含めて生のまま。
+TEST(Router, TargetIsRaw) {
+    TestServer srv([](hayate::App &app) {
+        app.get("/t/:x", [](hayate::Request &req) {
+            return hayate::Response::text(std::string(req.target()) + " " +
+                                          std::string(req.path()));
+        });
+    });
+    auto r = http_call("127.0.0.1", srv.port(), http::verb::get, "/t/a%20b?x=1+2");
+    EXPECT_EQ(r.status, 200);
+    EXPECT_EQ(r.body, "/t/a%20b?x=1+2 /t/a%20b");
+}
+
+// Allow はそのパスに登録した全メソッド。
+TEST(Router, AllowListsEveryMethod) {
+    TestServer srv([](hayate::App &app) {
+        auto ok = [](hayate::Request &) { return hayate::Response::text("x"); };
+        app.post("/p", ok);
+        app.get("/gp", ok);
+        app.post("/gp", ok);
+    });
+    auto only_post = http_call("127.0.0.1", srv.port(), http::verb::get, "/p");
+    EXPECT_EQ(only_post.status, 405);
+    EXPECT_EQ(only_post.allow, "POST");
+    auto both = http_call("127.0.0.1", srv.port(), http::verb::put, "/gp");
+    EXPECT_EQ(both.status, 405);
+    EXPECT_EQ(both.allow, "GET, POST");
+}

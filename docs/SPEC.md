@@ -72,7 +72,9 @@ Phase 1
 - HTTP/2 / ORM / テンプレートがリポジトリに無い（TLS は Phase 3 で受け入れた）
 - hello が公開ヘッダだけに依存する
 - debug + ASan で新規リーク・UAF が無い。macOS の Apple Clang の ASan には LeakSanitizer が無い
-  （`detect_leaks is not supported on this platform`）ので、macOS で見えるのは UAF だけ
+  （`detect_leaks is not supported on this platform`）ので、debug preset で見えるのは UAF だけ。
+  リークは Homebrew LLVM の clang で ASan を付けてビルドし、`ASAN_OPTIONS=detect_leaks=1` で全テストを
+  回して見る（2026-09-21、LLVM 23、234 件でリーク 0）
 - 頼んでいないファイルが diff に無い
 
 Phase 2（CORS）
@@ -321,7 +323,7 @@ app.tls({.cert_file = "server.pem", .key_file = "server.key"})
 - `ssl::context` は App が内部で組む。公開ヘッダに `asio::ssl` は出さない
 - `tls()` を呼んだ App は全接続が TLS。平文との同時待ち受けはしない
 - 証明書 / 鍵が読めない、または鍵が証明書と対でなければ `tls()` が投げる（`bind()` と同じく設定時に落とす）
-- `key_password` が空なら鍵にパスフレーズ無しとして扱う
+- `key_password` が空なら鍵にパスフレーズ無しとして扱う。暗号化された鍵なら `tls()` が投げる（端末で尋ねない）
 - ハンドシェイクの窓は `read_timeout`。失敗した接続は応答を書かずに閉じる
 - 終了は TLS shutdown → socket shutdown の順。相手の close_notify を待つのは `write_timeout` まで。
   停止中は close_notify を送るだけで返事を待たない（RFC 8446 §6.1。待つと `serve()` が戻らない）
@@ -468,7 +470,9 @@ I/O モデル:
   非ブロッキングで開いてから種別を見て、通常ファイルと分かった時点で非ブロッキングを外す
 - FS 待ち（正規化・stat・open とプールの順番待ち）が `fs_timeout` を超えたら 503。
   既定 5 秒。`files()` の第 4 引数で変える
-- 期限を過ぎて待つのをやめた場合も、ワーカーが触る状態は処理が終わるまで生かす
+- 期限を過ぎて待つのをやめた場合も、ワーカーが触る状態は処理が終わるまで生かす。ただし置いていった仕事は
+  プールを持たない。プールの寿命を決めるのは `files()` のハンドラと送出中の `FileSource` だけで、App より
+  長く生きない（仕事の完了は App の `io_context` に戻るので、App が先に壊れると壊れた strand を触る）
 - 本体はサイズに関係なく常に 64 KiB ずつ送る。1 応答のメモリはファイルサイズに依らず 64 KiB
 - `Content-Length` を立てる。chunked encoding は使わない
 - 送るのは stat した `size` まで。stat 後に伸びても増やさない
