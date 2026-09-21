@@ -189,10 +189,11 @@ App の `use()` は 404/405 を含む dispatch 全体を包む（CORS preflight 
 ### ルーティング
 
 - メソッドは `GET` と `POST` のみ
-- `:name` は 1 セグメント。`*name` は残り全部（空でも可）で、最後のセグメントにだけ置ける
+- `:name` は空でない 1 セグメント。`*name` は残り全部（空でも可）で、最後のセグメントにだけ置ける
 - 名前の無い `:` / `*` と、最後以外の `*name` は登録時に `std::invalid_argument` を投げる
 - 欠けた param / query / header は空 `string_view`
-- 一致優先: 各セグメントで static > param > wildcard。全セグメント同点なら先に登録した方
+- 一致優先: 各セグメントで static > param > wildcard。そこまで同点で片方だけが空の `*name` で
+  終わるなら、終わらない方（`/a` と `/a/*rest` への `GET /a` は `/a`）。登録順では決めない
 - 同じメソッドで同じ形（各セグメントの種類と static の文字列が同じ。param / wildcard の名前は見ない）を
   2 回登録したら投げる。後の方に一致する要求は無い
 - パス無し 404。パスはあるがメソッド違い 405 + `Allow`

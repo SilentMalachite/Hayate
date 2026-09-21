@@ -140,6 +140,10 @@ Match match_path(const std::vector<Seg> &segs, const std::vector<std::string> &p
                 return {};
             }
         } else {
+            // 空を受けるのは wildcard だけ。
+            if (parts[j].empty()) {
+                return {};
+            }
             m.params.emplace_back(seg.s, parts[j]);
         }
         m.score.push_back(seg_score(seg.kind));
@@ -160,7 +164,8 @@ bool better_score(const std::vector<int> &a, const std::vector<int> &b) {
             return a[i] > b[i];
         }
     }
-    return false;
+    // 同じ形は登録できないので、長さが違うのは片方が空の wildcard で終わるときだけ。
+    return a.size() < b.size();
 }
 
 Handler compose(const std::vector<Middleware> &mws, Handler h) {
