@@ -24,6 +24,8 @@ struct HttpCall {
     std::map<std::string, std::string> extra;
     std::error_code error;
     std::string error_message;
+    // 期限切れ。拒否や EOF と分けないと、固まった実装でも「拒否された」と読める。
+    bool timed_out{false};
 };
 
 // 呼び出し全体に timeout を掛ける。Beast の期限は非同期 I/O にしか効かないので、
@@ -81,6 +83,7 @@ inline HttpCall http_call(std::string host, std::uint16_t port, boost::beast::ht
         if (failed) {
             out.error = std::make_error_code(std::errc::connection_refused);
             out.error_message = failed.message();
+            out.timed_out = failed == boost::beast::error::timeout;
             return out;
         }
         out.status = res.result_int();
