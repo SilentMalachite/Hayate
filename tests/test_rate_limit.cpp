@@ -6,6 +6,8 @@
 #include <gtest/gtest.h>
 
 #include <chrono>
+#include <cstdint>
+#include <limits>
 
 namespace http = boost::beast::http;
 
@@ -70,4 +72,12 @@ TEST(RateLimit, KeepAliveRequestsShareOnePeerKey) {
     };
     EXPECT_EQ(send(), 200u);
     EXPECT_EQ(send(), 429u);
+}
+
+// 拒否中も数え続けると、同じ窓で 2^32 回目に 0 へ戻って通ってしまう。
+TEST(RateLimit, RejectedHitsDoNotWrap) {
+    hayate::mw::detail::RateWindow w;
+    w.count = std::numeric_limits<std::uint32_t>::max();
+    EXPECT_FALSE(hayate::mw::detail::admit(w, 1));
+    EXPECT_EQ(w.count, std::numeric_limits<std::uint32_t>::max());
 }
