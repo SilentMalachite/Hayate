@@ -1,24 +1,26 @@
-# UML — Hayate (for agents)
+# UML — Hayate（エージェント向け）
 
-English (canonical) | [日本語](UML.ja.md)
+[English](UML.md) | 日本語
 
-The canonical source is `docs/SPEC.md`. The canonical source for relations is `docs/ER.md`.
-Do not add types, interfaces or base classes that are not here.
-Accepted: Phase 1, Phase 2 (CORS / static files / rate limiting), Phase 3 (TLS / JWT verification / OpenAPI generation /
-minimal metrics / streaming of static files). Multipart / WS / SSE / gzip are not implemented.
+英語版 [UML.md](UML.md) の訳。正本は英語版で、食い違えば英語版に従う。
 
-Diagrams are Mermaid. Stereotypes:
+正本は `docs/SPEC.md`。関係の正本は `docs/ER.md`。
+ここに無い型・インタフェース・基底クラスを足さない。
+受け入れは Phase 1、Phase 2（CORS / 静的ファイル / レート制限）、Phase 3（TLS / JWT 検証 / OpenAPI 生成 /
+最小 metrics / 静的ファイルのストリーミング送出）。multipart / WS / SSE / gzip は実装しない。
 
-| Stereotype | Meaning |
+図は Mermaid。注釈の意味:
+
+| 注釈 | 意味 |
 |---|---|
-| none | A public API type (`include/hayate/`) |
-| `<<mw>>` | A public API type in the `hayate::mw` namespace (`mw::Jwt` etc.) |
-| `<<alias>>` | An alias such as `std::function`. Not a type of its own |
-| `<<concept>>` | A C++20 concept |
-| `<<internal>>` | A type inside `src/`. It does not appear in public headers |
-| `<<conceptual>>` | No type. Only shows how things are held |
+| なし | 公開 API の型（`include/hayate/`） |
+| `<<mw>>` | 公開 API の型で、`hayate::mw` 名前空間にある（`mw::Jwt` など） |
+| `<<alias>>` | `std::function` などの別名。独自の型ではない |
+| `<<concept>>` | C++20 の concept |
+| `<<internal>>` | `src/` の中の型。公開ヘッダに出ない |
+| `<<conceptual>>` | 型は無い。持ち方を図にしただけ |
 
-## Class diagram
+## クラス図
 
 ```mermaid
 classDiagram
@@ -250,25 +252,25 @@ classDiagram
     OpenApiInfo ..> App : openapi() reads routes
 ```
 
-- Composition `*--` is ownership. Request owns the request strings (target, headers, body, params), and its accessors return views.
-  Do not store views in a Response or App
-- `group()` makes a temporary child Router, wraps its routes in the child's middleware, adds them to the parent, then discards it.
-  A Router never holds a Router. Prefixes are concatenated and `//` is collapsed
-- A Connection owns itself through `shared_ptr` and a detached `co_spawn`. The App keeps only the connection count and the
-  `ConnectionSet` that `stop()` uses to cancel. Each connection gets its own strand, which carries that connection's I/O, timers and
-  coroutine. The accept loop and `stop()` run on one admin strand
-- Handlers and middleware are the user's function objects. They must be const-callable (`HandlerCallable`; `mutable` lambdas
-  are rejected at compile time). `wrap_handler` wraps synchronous handlers into an awaitable. No virtual base classes
-- Settings structs: `Limits` / `Tls` / `mw::Jwt` / `mw::Cors` / `mw::RateLimit` / `OpenApiInfo`.
-  Factories: `mw::cors()` / `mw::jwt()` / `mw::rate_limit()` return Middleware, `files()` / `metrics()` return a Handler,
-  and `openapi()` returns `Json`. `ssl::context` appears only inside the App
-- `Claims` is not an alias of `Json` because Extension keys are `typeid`, and an alias would collide with any other `Json`
-- The worker pool of `files(root, max_bytes, io_threads, fs_timeout)` is shared by the returned closure and the
-  `FileSource`s it returns. Only `files()` creates a `FileSource` (`OpenFile` is not public).
-  Do not take the pool out and keep it longer than the App
-- No classes like `StaticFile` / `Service` / `TlsContext` / `Metrics`
+- 合成 `*--` は所有。Request は要求の文字列（target・ヘッダ・本文・param）を所有し、アクセサは view を返す。
+  view を Response や App に保存しない
+- `group()` は一時的な子の Router を作り、そのルートを子の MW で包んで親に足してから捨てる。
+  Router は Router を持たない。接頭辞は連結して `//` を畳む
+- Connection は `shared_ptr` と detached `co_spawn` で自分を持つ。App が持つのは接続の数と、`stop()` が
+  取り消しに使う `ConnectionSet` だけ。接続ごとに strand を 1 本作り、その接続の I/O・タイマー・
+  coroutine を載せる。accept ループと `stop()` は admin strand 1 本に載せる
+- Handler と Middleware は利用者の関数オブジェクト。const で呼べること（`HandlerCallable`。`mutable` ラムダは
+  コンパイル時に弾く）。同期のハンドラは `wrap_handler` が awaitable に包む。仮想基底を切らない
+- 設定値の struct: `Limits` / `Tls` / `mw::Jwt` / `mw::Cors` / `mw::RateLimit` / `OpenApiInfo`。
+  工場: `mw::cors()` / `mw::jwt()` / `mw::rate_limit()` が Middleware、`files()` / `metrics()` が Handler、
+  `openapi()` が `Json` を返す。`ssl::context` は App の中にしか出てこない
+- `Claims` を `Json` の別名にしないのは、Extension のキーが `typeid` で、別名だと他の `Json` と衝突するため
+- `files(root, max_bytes, io_threads, fs_timeout)` のワーカープールは、返したクロージャと、返した
+  `FileSource` が共有する。`FileSource` を作るのは `files()` だけ（`OpenFile` は公開しない）。
+  プールを取り出して App より長く持たない
+- `StaticFile` / `Service` / `TlsContext` / `Metrics` のようなクラスは作らない
 
-## Packages
+## パッケージ
 
 ```mermaid
 classDiagram
@@ -308,10 +310,10 @@ classDiagram
     examples_hello ..> src_detail : forbidden
 ```
 
-`mw::detail` in `include/hayate/rate_limit.hpp` (`RateTable` / `hit`) sits in a public header so the middleware can be
-header-only, but it is not API.
+`include/hayate/rate_limit.hpp` の `mw::detail`（`RateTable` / `hit`）は、ヘッダだけの MW を作るために
+公開ヘッダにあるが、API ではない。
 
-## Connection states
+## 接続の状態
 
 ```mermaid
 stateDiagram-v2
@@ -329,13 +331,13 @@ stateDiagram-v2
     note right of shutdown : while stopping, TLS sends close_notify without waiting for the reply
 ```
 
-- The `waiting` window is `read_timeout` while waiting for the first header and `idle_timeout` while waiting for the next keep-alive header.
-  Reading the body after the header is complete uses `read_timeout`
-- A timeout closes. Only `stop()` sets `shutting`; while it is set, the connection closes instead of waiting for the next request,
-  and the response it writes carries `Connection: close`
-- A connection over `max_connections` is accepted and closed at once, before any Connection is created (no response is written)
+- `waiting` の窓は、1 本目のヘッダ待ちが `read_timeout`、keep-alive の次のヘッダ待ちが `idle_timeout`。
+  ヘッダが揃った後の本文読みは `read_timeout`
+- timeout は閉じる。`shutting` を立てるのは `stop()` だけで、立っていれば次の要求を待たずに閉じ、
+  書く応答には `Connection: close` を付ける
+- `max_connections` を超えた接続は、Connection を作る前に accept してすぐ閉じる（応答は書かない）
 
-## Sequence (one request)
+## シーケンス（1 リクエスト）
 
 ```mermaid
 sequenceDiagram
@@ -395,25 +397,25 @@ sequenceDiagram
     end
 ```
 
-- HEAD sends no body, but `Content-Length` is the value it would have if the body were sent
-- 1xx / 204 / 304 send neither a body nor `Content-Length`
-- A response whose header exceeds 65533 bytes cannot be sent, so the Connection replaces it with 500 (it skips middleware)
+- HEAD は本文を送らないが、`Content-Length` は本文を送った場合の値を付ける
+- 1xx / 204 / 304 は本文も `Content-Length` も送らない
+- ヘッダが 65533 バイトを超える応答は送れないので、Connection が 500 に差し替える（MW は通らない）
 
-## Constraints for agents (do not drop them from the diagrams)
+## エージェント向け制約（図から外さないこと）
 
-- Never register a Route with macros
-- `Router::add` takes GET / POST only. Registering the same shape twice for the same method, a `:` / `*` without a name, or a `*name`
-  in the middle throws `std::invalid_argument` at registration. `:name` never matches an empty segment. An exact match beats an empty `*name`
-- A path is split into segments before decoding. `param()` / `query()` are decoded, `path()` is raw
-- `set_header` drops names that are not tokens and strips CTLs from values (blocks header injection)
-- Exceptions never leave the Handler / Middleware boundary. `dispatch_route` catches the handler's, `dispatch` catches the middleware's,
-  and both turn them into 500
-- Asio/Beast failures become an Error and a response (413 / 431 / 500) while a response can still be written. When it cannot
-  (timeout, peer disconnect, handshake failure), the connection is just closed, and no Error is created that nobody would receive
-- `std::expected` is banned. `Result<T>` is a single `std::variant` implementation
-- Do not store a Request's views in a Response or App
-- No shared mutable globals. State belongs to the App, a Request Extension, or what a middleware / handler factory holds
-  (the mutex-guarded map of `rate_limit`, the pool of `files()`)
-- `stop()` cancels only connections waiting for a request. A request whose header is complete is finished
-- Do not add bases that are not in these diagrams (Service / Context / ApplicationBuilder)
-- The App's `use` wraps the whole dispatch, 404/405 included. `group` middleware applies only to matched Routes
+- マクロで Route を登録しない
+- `Router::add` は GET / POST だけ。同じメソッドの同じ形の二重登録、名前の無い `:` / `*`、途中の `*name` は
+  登録時に `std::invalid_argument`。`:name` は空のセグメントに一致しない。完全一致は空の `*name` に勝つ
+- パスはセグメントに分けてから復号する。`param()` / `query()` は復号後、`path()` は生
+- `set_header` は token でない名前を捨て、値から CTL を落とす（ヘッダ注入を断つ）
+- 例外は Handler / Middleware の境界を出ない。ハンドラの分は `dispatch_route`、MW の分は `dispatch` が
+  受けて 500 にする
+- Asio/Beast の失敗は、応答を書ける段階なら Error にして応答する（413 / 431 / 500）。書けない段階
+  （timeout・相手の切断・handshake 失敗）なら閉じるだけで、受け取る側のない Error は作らない
+- `std::expected` 禁止。`Result<T>` は `std::variant` の 1 実装
+- Request の view を Response や App に保存しない
+- 共有可変グローバルを置かない。状態は App か Request の Extension、または MW / Handler の工場が持つ
+  もの（`rate_limit` の mutex 付き map、`files()` のプール）
+- `stop()` が取り消すのは要求を待っている接続だけ。ヘッダが揃った要求は完了させる
+- この図に無い基底（Service / Context / ApplicationBuilder）を足さない
+- App の `use` は 404/405 を含む dispatch 全体を包む。`group` の MW はマッチした Route だけ

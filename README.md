@@ -1,11 +1,13 @@
 # Hayate
 
-C++20 の HTTP フレームワーク兼サーバー。namespace は `hayate`。
+English | [日本語](README.ja.md)
 
-ハンドラはコルーチン。公開 API は Fluent。マクロでルートを登録しない。
-土台は [Boost.Asio](https://www.boost.org/doc/libs/release/doc/html/boost_asio.html) と
-[Boost.Beast](https://www.boost.org/doc/libs/release/libs/beast/) で、
-自前のイベントループも自前の HTTP パーサも書かない。
+An HTTP framework and server for C++20. The namespace is `hayate`.
+
+Handlers are coroutines. The public API is fluent. Routes are never registered with macros.
+It is built on [Boost.Asio](https://www.boost.org/doc/libs/release/doc/html/boost_asio.html) and
+[Boost.Beast](https://www.boost.org/doc/libs/release/libs/beast/);
+it has no event loop or HTTP parser of its own.
 
 ```cpp
 #include <hayate/hayate.hpp>
@@ -17,48 +19,48 @@ int main() {
 }
 ```
 
-## 状態
+## Status
 
-| Phase | 中身 | |
+| Phase | Contents | |
 |---|---|---|
-| 0 | CMake Presets、公開ヘッダ、固定応答 | 済 |
-| 1 | HTTP/1.1、ルーティング、JSON、Middleware、Limits、graceful shutdown | 済 |
-| 2 | CORS / 静的ファイル / レート制限 | 済 |
-| 3 | TLS / JWT 検証 / OpenAPI 生成 / 最小 metrics / 静的ファイルのストリーミング送出 | 済 |
+| 0 | CMake Presets, public headers, fixed response | Done |
+| 1 | HTTP/1.1, routing, JSON, middleware, limits, graceful shutdown | Done |
+| 2 | CORS / static files / rate limiting | Done |
+| 3 | TLS / JWT verification / OpenAPI generation / minimal metrics / streaming of static files | Done |
 
-テストは GoogleTest。debug preset は ASan + UBSan、`tsan` preset は TSan 込みで走る。
+Tests use GoogleTest. The debug preset runs them with ASan + UBSan, the `tsan` preset with TSan.
 
-multipart / WebSocket / SSE / gzip は**実装しない**。
+Multipart / WebSocket / SSE / gzip are **not implemented**.
 
-## 必要なもの
+## Requirements
 
-- C++20（macOS の Apple Clang、Linux の GCC 13+ / Clang 16+）。Windows は未対応。
-  Linux は GitHub Actions（ubuntu-24.04、GCC 13 と Clang 16）で確かめている。
-  GCC 12 はコルーチンの誤コンパイル（PR 101367）があるので使えない
-- CMake 3.28+、Ninja
-- Boost 1.83+（Asio / Beast、ヘッダのみ）
-- OpenSSL 3（TLS と JWT の HMAC）
-- nlohmann/json 3.11.3、GoogleTest 1.15.2 は FetchContent で取る
+- C++20 (Apple Clang on macOS, GCC 13+ / Clang 16+ on Linux). Windows is not supported.
+  Linux is checked on GitHub Actions (ubuntu-24.04, GCC 13 and Clang 16).
+  GCC 12 cannot be used: it miscompiles coroutines (PR 101367)
+- CMake 3.28+, Ninja
+- Boost 1.83+ (Asio / Beast, header-only)
+- OpenSSL 3 (TLS and the HMAC for JWT)
+- nlohmann/json 3.11.3 and GoogleTest 1.15.2 are fetched with FetchContent
 
 ```bash
 # macOS
 brew install boost openssl@3 cmake ninja
-# Ubuntu 24.04 以降（libboost-dev は古い版を指すことがあるので 1.83 を名指しする）
+# Ubuntu 24.04 or later (name 1.83 explicitly; libboost-dev may point at an older version)
 apt install libboost1.83-dev libssl-dev cmake ninja-build
 ```
 
-## ビルドとテスト
+## Build and test
 
 ```bash
 cmake --preset debug
 cmake --build --preset debug
 cmake --build --preset test && ctest --preset test --output-on-failure
-# データ競合を見る
+# look for data races
 cmake --preset tsan && cmake --build --preset tsan && ctest --preset tsan --output-on-failure
 ```
 
-`release` preset はサニタイザ無し。macOS の Apple Clang の ASan には LeakSanitizer が無いので、
-debug preset で見えるのは UAF まで。リークは Homebrew LLVM の clang で見る:
+The `release` preset has no sanitizers. Apple Clang's ASan on macOS has no LeakSanitizer, so the
+debug preset only catches UAF. Check for leaks with Homebrew LLVM's clang:
 
 ```bash
 cmake -S . -B build/lsan -G Ninja -DCMAKE_BUILD_TYPE=Debug \
@@ -67,9 +69,9 @@ cmake -S . -B build/lsan -G Ninja -DCMAKE_BUILD_TYPE=Debug \
 cmake --build build/lsan && ASAN_OPTIONS=detect_leaks=1 ctest --test-dir build/lsan
 ```
 
-## 取り込み
+## Using Hayate
 
-FetchContent か `add_subdirectory` で取り込み、`hayate::hayate` にリンクする。install / `find_package` は無い。
+Pull it in with FetchContent or `add_subdirectory` and link `hayate::hayate`. There is no install / `find_package`.
 
 ```cmake
 include(FetchContent)
@@ -81,13 +83,13 @@ FetchContent_MakeAvailable(hayate)
 target_link_libraries(app PRIVATE hayate::hayate)
 ```
 
-C++20 は `hayate::hayate` から伝わる。Boost と OpenSSL は利用側の環境から `find_package` で探す。
+C++20 propagates from `hayate::hayate`. Boost and OpenSSL are found with `find_package` in the consumer's environment.
 
-版は SemVer。0.x の間はマイナーで公開 API が変わり得る。パッチでは変えない。
+Versioning is SemVer. While 0.x, a minor release may change the public API. A patch release does not.
 
-## できること
+## Features
 
-### ルーティング
+### Routing
 
 ```cpp
 app.get("/users/:id", [](hayate::Request &req) -> asio::awaitable<hayate::Response> {
@@ -101,14 +103,14 @@ app.post("/echo", [](hayate::Request &req) {
 app.group("/api/v1", [](hayate::Router &r) { r.get("/ping", ...); });
 ```
 
-`:name` は空でない 1 セグメント、`*name` は残り全部（空でも可）で最後にだけ置ける。
-優先はセグメントごとに static > param > wildcard で、`/a` は `/a/*rest` に勝つ。
-同じメソッドで同じ形のルート（`/u/:id` と `/u/:name`）の二重登録、名前の無い `:` / `*`、途中の `*name`、
-GET / POST 以外は、登録時に `std::invalid_argument` を投げる。
-メソッド違いは 405（`Allow` 付き）、パス無しは 404。
+`:name` is one non-empty segment; `*name` is the whole rest (may be empty) and may only come last.
+Priority per segment is static > param > wildcard, and `/a` beats `/a/*rest`.
+Registering the same shape twice for the same method (`/u/:id` and `/u/:name`), a `:` / `*` without a name,
+a `*name` in the middle, or any method other than GET / POST throws `std::invalid_argument` at registration.
+A wrong method is 405 (with `Allow`); no matching path is 404.
 
-ハンドラは値を返しても `awaitable<Response>` を返してもよい。ただし const で呼べること
-（`mutable` ラムダはコンパイルエラー）。全接続で共有されるので、状態は App か Request の Extension に置く。
+A handler may return a value or an `awaitable<Response>`, but it must be callable as const
+(a `mutable` lambda is a compile error). Handlers are shared by all connections, so keep state in the App or a Request Extension.
 
 ### Middleware
 
@@ -120,29 +122,29 @@ app.use([](hayate::Request &req, hayate::Next next) -> asio::awaitable<hayate::R
 });
 ```
 
-onion（入り A→B、戻り B→A）。`next` を呼ばなければそこで短絡する。
-`Router::group` の中で `use` すれば、その配下だけに掛かる。
+Onion order (in A→B, out B→A). Not calling `next` short-circuits there.
+`use` inside `Router::group` applies only to that group.
 
-### CORS / レート制限
+### CORS / rate limiting
 
 ```cpp
 app.use(hayate::mw::cors({.origin = "https://app.example"}));
 app.use(hayate::mw::rate_limit({.max = 60, .window = std::chrono::seconds(60)}));
 ```
 
-### 静的ファイル
+### Static files
 
 ```cpp
 app.get("/assets/*path", hayate::files("public"));
-// 配布上限 4 MiB、ワーカー 4 本、FS 待ちの上限 2 秒
+// serve up to 4 MiB, 4 workers, wait at most 2 s on the filesystem
 app.get("/dl/*path", hayate::files("downloads", 4u * 1024 * 1024, 4, std::chrono::seconds(2)));
 ```
 
-root の外・上限超過・無いファイル・通常ファイル以外は 404（存在を漏らさない）。
-FS 待ちが `fs_timeout`（既定 5 秒）を超えたら 503。
-ファイル I/O は `files()` が持つワーカープールで行い、io スレッドは filesystem を待たない。
-本体はサイズに関係なく 64 KiB ずつ送るので、1 応答のメモリはファイルサイズに依らない。
-`Content-Length` を立て、chunked encoding は使わない。
+Outside root, over the limit, missing, or not a regular file is 404 (existence is not leaked).
+Filesystem waits longer than `fs_timeout` (default 5 s) are 503.
+File I/O runs on the worker pool owned by `files()`; io threads never wait on the filesystem.
+The body is sent 64 KiB at a time whatever the size, so memory per response does not depend on file size.
+`Content-Length` is set; chunked encoding is not used.
 
 ### TLS
 
@@ -152,10 +154,10 @@ app.tls({.cert_file = "server.pem", .key_file = "server.key"})
    .serve();
 ```
 
-`tls()` を呼んだ App は全接続が TLS。TLS 1.1 以下は無効。
-読めない証明書・鍵と、証明書と対でない鍵は `tls()` の時点で投げる。
+After `tls()`, every connection of the App is TLS. TLS 1.1 and below are disabled.
+An unreadable certificate or key, or a key that does not pair with the certificate, throws at `tls()`.
 
-### JWT 検証（HS256）
+### JWT verification (HS256)
 
 ```cpp
 app.group("/api", [](hayate::Router &r) {
@@ -167,8 +169,8 @@ app.group("/api", [](hayate::Router &r) {
 });
 ```
 
-`alg` は署名を見る前に検査するので `alg: none` とアルゴリズム混同を断つ。
-署名比較は定数時間。`exp` 無しは拒否する。失敗は理由によらず 401 + `WWW-Authenticate: Bearer`。
+`alg` is checked before the signature, which blocks `alg: none` and algorithm confusion.
+Signatures are compared in constant time. Tokens without `exp` are rejected. Every failure is 401 + `WWW-Authenticate: Bearer`, whatever the reason.
 
 ### metrics
 
@@ -176,7 +178,7 @@ app.group("/api", [](hayate::Router &r) {
 app.get("/metrics", hayate::metrics(app));
 ```
 
-Prometheus テキストで accept / 拒否 / 同時接続 / リクエスト数 / ステータスクラス別応答数。
+Prometheus text: accepted / rejected / open connections, request count, and responses by status class.
 
 ### OpenAPI
 
@@ -186,8 +188,8 @@ app.get("/openapi.json", [&app](hayate::Request &) {
 });
 ```
 
-登録済みルートから OpenAPI 3.1 を作る。Router は `pattern` と `method` しか持たないので、
-リクエスト / レスポンスのスキーマは**推測せず出さない**。
+Builds OpenAPI 3.1 from the registered routes. The Router only knows `pattern` and `method`,
+so request / response schemas are **neither guessed nor emitted**.
 
 ### Limits
 
@@ -195,7 +197,7 @@ app.get("/openapi.json", [&app](hayate::Request &) {
 app.limits({.max_body_bytes = 4u * 1024 * 1024, .max_connections = 4096});
 ```
 
-| 項目 | 既定 |
+| Setting | Default |
 |---|---|
 | `max_header_bytes` | 8192 |
 | `max_body_bytes` | 1 MiB |
@@ -203,31 +205,32 @@ app.limits({.max_body_bytes = 4u * 1024 * 1024, .max_connections = 4096});
 | `idle_timeout` | 60s |
 | `max_connections` | 1024 |
 
-超過は header 431 / body 413。タイムアウト切れは接続を閉じる。
-`stop()` は新規 accept を止め、要求を待っているだけの接続（keep-alive の次の要求待ちなど）はすぐ閉じ、
-ヘッダが揃った要求は完了させてから io_context を止める。TLS は停止中、close_notify の返事を待たない。
+An oversized header is 431, an oversized body 413. A timeout closes the connection.
+`stop()` stops new accepts, closes connections that are only waiting for a request (such as waiting for the next keep-alive request) at once,
+completes requests whose header has arrived, then stops the io_context. While stopping, TLS does not wait for the close_notify reply.
 
-## 設計の約束
+## Design promises
 
-- `std::expected` / C++ Modules / C++23 以降の必須機能は使わない
-- JSON は nlohmann 1 本。`hayate::Json` はその別名
-- `new` / `delete` / `malloc`、生配列を書かない
-- `Request` は要求の文字列を所有し、アクセサは view を返す。寿命は `Request`。view を `App` や `Response` に保存しない
-- 例外はハンドラ / Middleware の境界を出ない。Beast / Asio の失敗は、応答を書ける段階なら `Error` にして
-  応答する（413 / 431 / 500）。書けない段階（timeout・相手の切断・handshake 失敗）なら閉じるだけ
-- 共有可変グローバルを持たない。状態は `App` か `Request` の Extension、または Middleware / Handler の工場が持つ
-- 既存フレームワーク（Drogon / Crow / Oat++ / Cinatra / userver）のコードをコピーしない
+- No `std::expected` / C++ Modules / features that require C++23 or later
+- One JSON library: nlohmann. `hayate::Json` is an alias of it
+- No `new` / `delete` / `malloc`, no raw arrays
+- `Request` owns the request strings and its accessors return views. Their lifetime is the `Request`. Never store a view in `App` or `Response`
+- Exceptions never leave the handler / middleware boundary. Beast / Asio failures become an `Error` and a response
+  (413 / 431 / 500) while a response can still be written. Otherwise (timeout, peer disconnect, handshake failure) the connection is just closed
+- No shared mutable globals. State belongs to the `App`, a `Request` Extension, or a middleware / handler factory
+- No code is copied from existing frameworks (Drogon / Crow / Oat++ / Cinatra / userver)
 
-## やらないこと
+## Non-goals
 
-HTTP/2、HTTP/3、gRPC、GraphQL、HTML テンプレート、ORM、マイグレーション、
-multipart、WebSocket、SSE、gzip、JWT の RS256 / JWKS、mTLS、OpenAPI のスキーマ推論。
+HTTP/2, HTTP/3, gRPC, GraphQL, HTML templates, ORM, migrations,
+multipart, WebSocket, SSE, gzip, JWT RS256 / JWKS, mTLS, OpenAPI schema inference.
 
-## ライセンス
+## License
 
-[Apache License 2.0](LICENSE)。
+[Apache License 2.0](LICENSE).
 
-## ドキュメント
+## Documentation
 
-正本は [`docs/SPEC.md`](docs/SPEC.md)。図は [`docs/ER.md`](docs/ER.md) と
-[`docs/UML.md`](docs/UML.md)。チャットでの合意はファイルに落とすまで存在しない。
+English is canonical. Each document has a Japanese translation next to it as `*.ja.md`; when they disagree, the English wins.
+The source of truth is [`docs/SPEC.md`](docs/SPEC.md). Diagrams are in [`docs/ER.md`](docs/ER.md) and
+[`docs/UML.md`](docs/UML.md). An agreement made in chat does not exist until it is written to a file.

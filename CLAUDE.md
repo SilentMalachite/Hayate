@@ -4,6 +4,7 @@ Claude Code で **Hayate** を扱うときの指示。
 `AGENTS.md` は Sol 向けで**写しではない**。規約を変えるときは両方を直す。
 
 正本: `docs/SPEC.md`。図は `docs/ER.md` / `docs/UML.md`。
+文書は英語が正本で、日本語訳は隣の `*.ja.md`。英語を先に直し、同じコミットで訳も直す。
 チャットの合意はファイルに落とすまで存在しない。
 
 コード探索は Serena（clangd LSP、`.serena/`）。型・所有・経路は Graphify（`graphify-out/`、質問は `graphify query`）。grep / ファイル全読みの前に両方を使う。graph が無ければ先に `/graphify`。
