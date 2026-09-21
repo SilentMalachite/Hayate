@@ -32,7 +32,8 @@ multipart / WebSocket / SSE / gzip は**実装しない**。
 
 ## 必要なもの
 
-- C++20（macOS の Apple Clang、Linux の GCC 12+ / Clang 16+）。Windows は未対応
+- C++20（macOS の Apple Clang、Linux の GCC 12+ / Clang 16+）。Windows は未対応。
+  Linux は GitHub Actions（ubuntu-24.04、GCC 12 と Clang 16）で確かめている
 - CMake 3.28+、Ninja
 - Boost 1.83+（Asio / Beast、ヘッダのみ）
 - OpenSSL 3（TLS と JWT の HMAC）

@@ -144,7 +144,8 @@ Phase 3（metrics）
 - 言語: C++20 厳守。`std::expected` は使わない
 - ビルド: CMake 3.28+、Presets `debug` / `release` / `test` / `tsan`。debug は ASan + UBSan、`tsan` は TSan。
   `test` は `debug` と同じビルドディレクトリ（`--preset debug` の直後に `--build --preset test` が通る）
-- 対象: macOS (Apple Clang) と Linux (GCC 12+ / Clang 16+)。Windows は後追い
+- 対象: macOS (Apple Clang) と Linux (GCC 12+ / Clang 16+)。Windows は後追い。
+  Linux は CI（GitHub Actions、ubuntu-24.04、GCC 12 と Clang 16、`test` と `tsan`）で確かめる
 - I/O: Boost.Asio 1.83+。`asio::awaitable` / `co_spawn`。公開ヘッダで `namespace asio = boost::asio;`
 - ファイル I/O: ブロッキング FS 呼び出しは `asio::thread_pool` に逃がす。`asio::stream_file` は `BOOST_ASIO_HAS_FILE`（Windows ハンドル / Linux io_uring）依存で macOS に無いため使わない
 - HTTP: Boost.Beast（HTTP/1.1）
