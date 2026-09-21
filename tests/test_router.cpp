@@ -5,6 +5,27 @@
 
 namespace http = boost::beast::http;
 
+// ハンドラは全接続で共有される。mutable は同期・非同期とも受けない。
+namespace {
+auto sync_const = [](hayate::Request &) { return hayate::Response::text("x"); };
+auto async_const = [](hayate::Request &) -> boost::asio::awaitable<hayate::Response> {
+    co_return hayate::Response::text("x");
+};
+auto sync_mutable = [n = 0](hayate::Request &) mutable {
+    ++n;
+    return hayate::Response::text("x");
+};
+auto async_mutable =
+    [n = 0](hayate::Request &) mutable -> boost::asio::awaitable<hayate::Response> {
+    ++n;
+    co_return hayate::Response::text("x");
+};
+} // namespace
+static_assert(hayate::HandlerCallable<decltype(sync_const)>);
+static_assert(hayate::HandlerCallable<decltype(async_const)>);
+static_assert(!hayate::HandlerCallable<decltype(sync_mutable)>);
+static_assert(!hayate::HandlerCallable<decltype(async_mutable)>);
+
 TEST(Router, GetStatic) {
     TestServer srv([](hayate::App &app) {
         app.get("/ping", [](hayate::Request &) { return hayate::Response::text("pong"); });

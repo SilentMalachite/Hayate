@@ -176,6 +176,9 @@ using Middleware = std::function<asio::awaitable<Response>(Request&, Next)>;
 
 - `asio::awaitable<Response>(Request&)`
 - `Response(Request&)`（内部で awaitable に包む）
+- どちらも **const で呼べること**（`mutable` ラムダは不可、コンパイル時に弾く）。ハンドラは全接続で
+  共有されるので、状態を持たせると `threads(n>1)` で競合する。状態は App か Request の Extension に置く。
+  条件は公開 concept `hayate::HandlerCallable` で表す
 
 onion: 入りは登録順 A→B、戻りは B→A。`next` を呼ばなければ短絡。
 App の `use()` は 404/405 を含む dispatch 全体を包む（CORS preflight とエラー応答にヘッダが要る）。
