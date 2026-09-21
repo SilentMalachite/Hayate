@@ -99,9 +99,11 @@ if(HAYATE_BUILD_TESTS)
         tests/test_jwt.cpp
         tests/test_openapi.cpp
         tests/test_concurrency.cpp
+        tests/test_http.cpp
     )
     target_include_directories(hayate_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
     target_link_libraries(hayate_tests PRIVATE hayate GTest::gtest_main)
     include(GoogleTest)
-    gtest_discover_tests(hayate_tests)
+    # 退行でサーバーが黙っても ctest が止まり続けないための上限。
+    gtest_discover_tests(hayate_tests PROPERTIES TIMEOUT 60)
 endif()

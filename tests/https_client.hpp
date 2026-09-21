@@ -25,26 +25,60 @@ inline HttpCall https_call(std::string host, std::uint16_t port, boost::beast::h
         net::io_context ioc;
         auto ctx = test_client_ctx();
         beast::ssl_stream<beast::tcp_stream> stream{ioc, ctx};
-        beast::get_lowest_layer(stream).expires_after(timeout);
-        beast::get_lowest_layer(stream).connect(
-            net::ip::tcp::endpoint(net::ip::make_address(host), port));
-        stream.handshake(net::ssl::stream_base::client);
+        const net::ip::tcp::endpoint ep(net::ip::make_address(host), port);
         http::request<http::string_body> req{method, target, 11};
         req.set(http::field::host, host);
         req.keep_alive(false);
         req.set(http::field::connection, "close");
-        http::write(stream, req);
         beast::flat_buffer buf;
         http::response<http::string_body> res;
-        http::read(stream, buf, res);
+        boost::system::error_code failed;
+        // http_call と同じく非同期で回し、timeout を全体に効かせる。
+        net::co_spawn(
+            ioc,
+            [&]() -> net::awaitable<void> {
+                beast::get_lowest_layer(stream).expires_after(timeout);
+                auto [cec] =
+                    co_await beast::get_lowest_layer(stream).async_connect(ep, net::as_tuple);
+                if (cec) {
+                    failed = cec;
+                    co_return;
+                }
+                auto [hec] =
+                    co_await stream.async_handshake(net::ssl::stream_base::client, net::as_tuple);
+                if (hec) {
+                    failed = hec;
+                    co_return;
+                }
+                auto [wec, wn] = co_await http::async_write(stream, req, net::as_tuple);
+                (void)wn;
+                if (wec) {
+                    failed = wec;
+                    co_return;
+                }
+                auto [rec, rn] = co_await http::async_read(stream, buf, res, net::as_tuple);
+                (void)rn;
+                if (rec) {
+                    failed = rec;
+                    co_return;
+                }
+                // close_notify を送る。サーバーが相手の close_notify を待ち続けないように。
+                auto [sec] = co_await stream.async_shutdown(net::as_tuple);
+                (void)sec;
+            },
+            net::detached);
+        ioc.run();
+        if (failed) {
+            out.error = std::make_error_code(std::errc::connection_refused);
+            out.error_message = failed.message();
+            return out;
+        }
         out.status = res.result_int();
         out.body = res.body();
         out.content_type = std::string(res[http::field::content_type]);
         for (const auto &name : want) {
             out.extra[name] = std::string(res[name]);
         }
-        boost::system::error_code ec;
-        stream.shutdown(ec);
     } catch (const std::exception &ex) {
         out.error = std::make_error_code(std::errc::connection_refused);
         out.error_message = ex.what();

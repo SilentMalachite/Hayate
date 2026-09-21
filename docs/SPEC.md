@@ -126,7 +126,8 @@ Phase 3（metrics）
 - TLS: OpenSSL 3 via `asio::ssl`。`find_package(OpenSSL 3 REQUIRED)`。最低 TLS 1.2
 - JSON: nlohmann/json v3.11.3 1 本。`hayate::Json` は `nlohmann::json` の別名。現行 glaze は C++23 必須のため採用しない。混在禁止
 - エラー: `hayate::Result<T>` は `std::variant<T, Error>` の薄い自前 1 本。Boost.Outcome は使わない
-- テスト: GoogleTest。実装の前に失敗するテスト。ループバック + エフェメラルポート。スリープ同期しない
+- テスト: GoogleTest。実装の前に失敗するテスト。ループバック + エフェメラルポート。スリープ同期しない。
+  テスト用クライアントは非同期 I/O で期限を効かせ（Beast の期限は同期 I/O に効かない）、CTest にも TIMEOUT を置く
 - 依存: Boost と OpenSSL は `find_package`。nlohmann/json と GoogleTest は FetchContent。vcpkg は使わない
 - 所有: 入力は `string_view` / `span<const byte>`。寿命は Request。足りるならコピーしない
 - スレッド: io_context あたり 1。`app.threads(n)` で複数。共有可変は strand か mutex を書いてから
