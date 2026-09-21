@@ -69,8 +69,9 @@ template <typename Body> void settle_keep_alive(http::response<Body> &out, bool 
     }
 }
 
+// HTTP/1.0 の client は 1xx を知らないので、期待されていても返さない（RFC 9110 §10.1.1）。
 bool expects_continue(const http::request<http::string_body> &req) {
-    return detail::iequals(req[http::field::expect], "100-continue");
+    return req.version() >= 11 && detail::iequals(req[http::field::expect], "100-continue");
 }
 
 // 本文を持てないステータス。prepare_payload() は 204 に Content-Length: 0 を付け、

@@ -221,3 +221,24 @@ TEST(Http, OversizedHeaderIs500) {
     EXPECT_EQ(res.result_int(), 500);
     EXPECT_EQ(res.count("X-Big"), 0u);
 }
+
+// HTTP/1.0 の client は 1xx を知らない。100-continue の期待は無視する（RFC 9110 §10.1.1）。
+TEST(Http, ExpectContinueIgnoredOnHttp10) {
+    TestServer srv([](hayate::App &app) {
+        app.post("/echo",
+                 [](hayate::Request &req) { return hayate::Response::text(text_of(req)); });
+    });
+    Conn c(srv.port());
+    ASSERT_FALSE(c.connect_error());
+    http::request<http::string_body> req{http::verb::post, "/echo", 10};
+    req.set(http::field::host, "127.0.0.1");
+    req.set(http::field::expect, "100-continue");
+    req.body() = "hello";
+    req.prepare_payload();
+    ASSERT_FALSE(c.write(req));
+    http::response<http::string_body> res;
+    const auto ec = c.read(res);
+    ASSERT_FALSE(ec) << ec.message();
+    EXPECT_EQ(res.result_int(), 200);
+    EXPECT_EQ(res.body(), "hello");
+}

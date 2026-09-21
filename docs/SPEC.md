@@ -239,7 +239,8 @@ HTTP/1.1 の約束:
 - HEAD はルーティングしない（GET 扱いにしない。404 / 405 のまま）。ただし HEAD への応答は
   ステータスによらず本文を送らない。`Content-Length` は本文を送った場合の値を付ける
 - `Expect: 100-continue` の要求には、本文を読む前に `100 Continue` を返す。
-  `Content-Length` が `max_body_bytes` を超えるなら 100 を出さずに 413
+  `Content-Length` が `max_body_bytes` を超えるなら 100 を出さずに 413。
+  HTTP/1.0 の要求の 100-continue は無視する（1xx を知らない。RFC 9110 §10.1.1）
 - 接続を続けるかは「サーバーの判断」かつ「応答の `Connection`」。ハンドラが `Connection: close` を
   付ければ閉じる。サーバーが閉じると決めたら（要求が close、停止中など）、ハンドラの keep-alive は
   無視して `Connection: close` を送る。送ったヘッダと実際の挙動を食い違わせない
