@@ -1,3 +1,4 @@
+#include "detail/files.hpp"
 #include "detail/ascii.hpp"
 #include "detail/offload.hpp"
 #include "detail/open_file.hpp"
@@ -82,23 +83,10 @@ Response stat_blocking(const fs::path &root, const std::string &raw, std::uint64
 
 } // namespace
 
-Handler files(std::string_view root, std::uint64_t max_bytes, std::uint32_t io_threads,
-              std::chrono::milliseconds fs_timeout) {
-    // 先に絶対パスにする。libstdc++ の weakly_canonical は未作成の相対パスを相対のまま返し、
-    // 後で作られると候補（絶対パス）が contained() で弾かれる。
-    std::error_code abs_ec;
-    auto abs_root = fs::absolute(fs::path{std::string(root)}, abs_ec);
-    if (abs_ec) {
-        abs_root = fs::path{std::string(root)};
-    }
-    fs::path root_path = fs::weakly_canonical(abs_root);
-    // root が未作成だと weakly_canonical が末尾 separator を残し、contained() が常に偽になる。
-    if (root_path.filename().empty() && root_path.parent_path() != root_path) {
-        root_path = root_path.parent_path();
-    }
-    // FS 呼び出しは io スレッドから外す。Handler はコピー可能が要るので shared_ptr で持つ。
-    auto pool = std::make_shared<net::thread_pool>(io_threads == 0 ? 1 : io_threads);
-    return [root_path = std::move(root_path), max_bytes, fs_timeout,
+Handler detail::files_on(fs::path root, std::uint64_t max_bytes,
+                         std::chrono::milliseconds fs_timeout,
+                         std::shared_ptr<net::thread_pool> pool) {
+    return [root_path = std::move(root), max_bytes, fs_timeout,
             pool = std::move(pool)](Request &req) -> net::awaitable<Response> {
         // view はスレッドをまたがせない。プールへ渡す前にコピーする。
         const std::string raw(req.param("path"));
@@ -116,6 +104,25 @@ Handler files(std::string_view root, std::uint64_t max_bytes, std::uint32_t io_t
         }
         co_return std::move(*res);
     };
+}
+
+Handler files(std::string_view root, std::uint64_t max_bytes, std::uint32_t io_threads,
+              std::chrono::milliseconds fs_timeout) {
+    // 先に絶対パスにする。libstdc++ の weakly_canonical は未作成の相対パスを相対のまま返し、
+    // 後で作られると候補（絶対パス）が contained() で弾かれる。
+    std::error_code abs_ec;
+    auto abs_root = fs::absolute(fs::path{std::string(root)}, abs_ec);
+    if (abs_ec) {
+        abs_root = fs::path{std::string(root)};
+    }
+    fs::path root_path = fs::weakly_canonical(abs_root);
+    // root が未作成だと weakly_canonical が末尾 separator を残し、contained() が常に偽になる。
+    if (root_path.filename().empty() && root_path.parent_path() != root_path) {
+        root_path = root_path.parent_path();
+    }
+    // FS 呼び出しは io スレッドから外す。Handler はコピー可能が要るので shared_ptr で持つ。
+    return detail::files_on(std::move(root_path), max_bytes, fs_timeout,
+                            std::make_shared<net::thread_pool>(io_threads == 0 ? 1 : io_threads));
 }
 
 } // namespace hayate
