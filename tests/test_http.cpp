@@ -170,3 +170,38 @@ TEST(Http, ServerCloseOverridesHandlerKeepAlive) {
     EXPECT_EQ(res.result_int(), 200);
     EXPECT_FALSE(res.keep_alive());
 }
+
+// 204 は本文を持たない。`Content-Length: 0` も付けない（RFC 9110 §8.6）。
+TEST(Http, NoContentHasNoContentLength) {
+    TestServer srv([](hayate::App &app) {
+        app.get("/", [](hayate::Request &) { return hayate::Response::no_content(); });
+    });
+    Conn c(srv.port());
+    http::write(c.stream, make_req(http::verb::get, "/", false));
+    http::response<http::string_body> res;
+    http::read(c.stream, c.buf, res);
+    EXPECT_EQ(res.result_int(), 204);
+    EXPECT_EQ(res.count(http::field::content_length), 0u);
+}
+
+// 本文付きの 204 を Beast に渡すと投げ、応答なしで切れる。本文は捨てて送る。
+TEST(Http, NoContentDropsHandlerBody) {
+    TestServer srv([](hayate::App &app) {
+        app.get("/", [](hayate::Request &) {
+            auto res = hayate::Response::text("x");
+            res.status(204);
+            return res;
+        });
+    });
+    Conn c(srv.port());
+    boost::system::error_code ec;
+    http::write(c.stream, make_req(http::verb::get, "/", false), ec);
+    http::response<http::string_body> res;
+    if (!ec) {
+        http::read(c.stream, c.buf, res, ec);
+    }
+    ASSERT_FALSE(ec) << ec.message();
+    EXPECT_EQ(res.result_int(), 204);
+    EXPECT_EQ(res.count(http::field::content_length), 0u);
+    EXPECT_TRUE(res.body().empty());
+}

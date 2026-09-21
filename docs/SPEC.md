@@ -239,6 +239,8 @@ HTTP/1.1 の約束:
 - 接続を続けるかは「サーバーの判断」かつ「応答の `Connection`」。ハンドラが `Connection: close` を
   付ければ閉じる。サーバーが閉じると決めたら（要求が close、停止中など）、ハンドラの keep-alive は
   無視して `Connection: close` を送る。送ったヘッダと実際の挙動を食い違わせない
+- 1xx / 204 / 304 の応答は本文を持たない。ハンドラの本文は捨て、`Content-Length` /
+  `Transfer-Encoding` は付けない（RFC 9110 §8.6、§6.4.1）
 
 ### JSON
 
