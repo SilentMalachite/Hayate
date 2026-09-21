@@ -208,6 +208,8 @@ App の `use()` は 404/405 を含む dispatch 全体を包む（CORS preflight 
 - `run()` は accept ループ。`asio::awaitable<void>`。`stop()` で終わる。
   acceptor は App の `io_context` に束縛されているので、`run()` もその `io_context` 上で spawn する。
   外部の executor では動かない
+- accept が失敗しても accept ループは終えない（終えるのは `stop()` だけ）。失敗したら 100 ms 待って
+  次の accept へ（fd 枯渇で空回りしない）。`stop()` はその待ちも取り消す
 - accept した接続ごとに strand を 1 本作る。その接続の socket・stream・タイマー・coroutine は
   すべてその strand 上で動く（`threads(n)` で n>1 のとき Beast の stream が要求する条件）
 - accept ループと `stop()` は管理用 strand 1 本で直列化する。`stop()` はどのスレッドから

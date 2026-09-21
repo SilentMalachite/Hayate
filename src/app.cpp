@@ -6,6 +6,7 @@
 #include <hayate/app.hpp>
 
 #include <atomic>
+#include <chrono>
 #include <csignal>
 #include <cstddef>
 #include <cstdint>
@@ -22,6 +23,8 @@ using tcp = detail::tcp;
 
 namespace {
 
+constexpr std::chrono::milliseconds accept_retry_delay{100};
+
 // 0 を下回らせない。accept 側と Connection の終了側の両方から呼ばれる。
 void release_one(std::atomic<std::uint32_t> &n) {
     auto cur = n.load();
@@ -35,6 +38,8 @@ struct App::Impl {
     net::io_context ioc;
     // accept ループと stop() をここで直列化する。多重 stop と SIGTERM が重ならない。
     net::strand<net::io_context::executor_type> admin{net::make_strand(ioc)};
+    // accept の失敗後の待ち。stop() が取り消せるようにここに置く。
+    net::steady_timer accept_retry{admin};
     // acceptor より後に壊れ、ioc より先に壊れる位置に置く。
     std::unique_ptr<ssl::context> ssl_ctx;
     std::unique_ptr<tcp::acceptor> acceptor;
@@ -109,7 +114,14 @@ boost::asio::awaitable<void> App::run() {
         net::any_io_executor conn_ex(net::make_strand(impl_->ioc));
         auto [ec, sock] = co_await impl_->acceptor->async_accept(conn_ex, net::as_tuple);
         if (ec) {
-            break;
+            if (!impl_->accepting.load() || ec == net::error::operation_aborted ||
+                !impl_->acceptor->is_open()) {
+                break;
+            }
+            // fd 枯渇などで終えると、負荷が引いた後も誰も繋げない。すぐ再試行すると空回りする。
+            impl_->accept_retry.expires_after(accept_retry_delay);
+            co_await impl_->accept_retry.async_wait(net::as_tuple);
+            continue;
         }
         const auto n = impl_->connections.fetch_add(1) + 1;
         if (n > impl_->limits.max_connections) {
@@ -174,6 +186,7 @@ void App::stop() {
         if (impl->acceptor) {
             impl->acceptor->close(ec);
         }
+        impl->accept_retry.cancel();
         if (impl->signals) {
             impl->signals->cancel(ec);
         }
