@@ -164,6 +164,8 @@ public:
 ```
 
 `ok()==false` で `value()`、`ok()==true` で `error()` は契約違反（assert）。例外で結果を返さない。
+`std::move(r).value()` の後の `r` は読まない（中身は move 済みで、`ok()` は true のまま）。
+`error()` は `const&` だけで、move して取り出す版は持たない。
 
 ### Handler / Middleware
 
@@ -183,7 +185,10 @@ using Middleware = std::function<asio::awaitable<Response>(Request&, Next)>;
 
 onion: 入りは登録順 A→B、戻りは B→A。`next` を呼ばなければ短絡。
 App の `use()` は 404/405 を含む dispatch 全体を包む（CORS preflight とエラー応答にヘッダが要る）。
-`group` の MW はマッチしたルートにだけ付く。
+`group` の MW はマッチしたルートにだけ付く。group のパスで出る 404 / 405 はどのルートにも
+マッチしていないので、group の MW を通らない（App の MW だけ）。
+入れ子は App → 外の group → 内の group → ハンドラ。`use()` は呼んだ位置に関係なく、その App / Router の
+全ルートに付く。
 ハンドラと MW が投げた例外は `dispatch` が 500 に変換する。接続は閉じない。
 
 ### ルーティング
@@ -275,6 +280,7 @@ T* Request::get() noexcept;       // 無ければ nullptr
 ```
 
 寿命は Request。ポインタを Response / App に保存しない。
+同じ `T` を `set` し直すと前の値は壊れ、前に返した参照とポインタは無効になる。
 
 ### TLS（Phase 3）
 
@@ -364,11 +370,14 @@ app.get("/metrics", hayate::metrics(app));
 hayate_connections_accepted_total   counter
 hayate_connections_rejected_total   counter  max_connections 超過で拒否した数
 hayate_connections_open             gauge    いま開いている接続
-hayate_requests_total               counter  応答を書いた数
+hayate_requests_total               counter  書こうとした応答の数
 hayate_responses_total{class="Nxx"} counter  1xx..5xx の 5 本
 ```
 
-- `requests_total` は応答を書いた数。上限超過の 413 / 431 も数える（Router に届かなくても応答は返る）
+- `requests_total` と `responses_total` は応答を書く直前に数える。書き込みが途中で失敗しても数える。
+  上限超過の 413 / 431 も数える（Router に届かなくても応答は返る）
+- 系列はそれぞれ独立に進む。1 回の出力の中で系列同士（`requests_total` と `responses_total` の和など）が
+  一致するとは限らない
 - `responses_total` のクラスは `status / 100`。範囲外は数えない
 - `/metrics` 自身は自分の出力に入らない。応答を書く直前に数えるので次のスクレイプに出る
 - ヒストグラム / per-route ラベル / OpenTelemetry は出さない
@@ -419,6 +428,9 @@ I/O モデル:
 - 同時に走る読みは `io_threads` 本まで。溢れた分はプールのキューで待つ
 - ハンドラはバイトを読まない。`Response` に `FileSource`（path / size / プール / 開いたファイル）を載せ、
   Connection が送出する。`path` は Content-Type の判定にだけ使う
+- `FileSource` を作るのは `files()` だけ（開いたファイルの型は公開しない）。`pool` を取り出して
+  App より長く持たない。ワーカーの完了は App の `io_context` に戻るので、App が先に壊れると
+  壊れた strand を触る
 - **open はハンドラ側（ワーカー）で済ませる。**root 内かの判定は開いた fd の実パスに対して行い、
   検証した対象と送る対象を同じにする。Connection は送出時にパスを辿り直さない（symlink 差し替えを防ぐ）
 - 通常ファイル以外（FIFO・デバイス・ディレクトリ）は 404。open で待たされないよう
