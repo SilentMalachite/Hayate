@@ -117,6 +117,22 @@ TEST(Router, GroupCollapsesDoubleSlash) {
     EXPECT_EQ(r.body, "ok");
 }
 
+// 先頭 `/` は省略できる。group の継ぎ目にも補うので `/apiping` にはならない。
+TEST(Router, PatternWithoutLeadingSlash) {
+    TestServer srv([](hayate::App &app) {
+        app.get("ping", [](hayate::Request &) { return hayate::Response::text("top"); });
+        app.group("/api", [](hayate::Router &r) {
+            r.get("ping", [](hayate::Request &) { return hayate::Response::text("api"); });
+        });
+    });
+    auto top = http_call("127.0.0.1", srv.port(), http::verb::get, "/ping");
+    EXPECT_EQ(top.status, 200);
+    EXPECT_EQ(top.body, "top");
+    auto api = http_call("127.0.0.1", srv.port(), http::verb::get, "/api/ping");
+    EXPECT_EQ(api.status, 200);
+    EXPECT_EQ(api.body, "api");
+}
+
 TEST(Router, QueryValue) {
     TestServer srv([](hayate::App &app) {
         app.get("/q", [](hayate::Request &req) {

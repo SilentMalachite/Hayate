@@ -567,6 +567,17 @@ TEST(Jwt, SchemeWithoutSpaceIs401) {
     }
 }
 
+// RFC 6750 は "Bearer" 1*SP b64token。空白が 2 つ以上でもトークンは同じ。
+TEST(Jwt, SeveralSpacesAfterBearerAccepted) {
+    TestServer srv([](hayate::App &app) { protect(app, base_cfg()); });
+    const auto tok = make_token(hs256_header(),
+                                Json::object({{"sub", "alice"}, {"exp", now_s() + 300}}), kSecret);
+    auto r = http_call("127.0.0.1", srv.port(), http::verb::get, "/me", {}, {},
+                       std::chrono::seconds(2), {{"Authorization", "Bearer   " + tok}});
+    EXPECT_EQ(r.status, 200);
+    EXPECT_EQ(r.body, "alice");
+}
+
 // aud は文字列か、文字列を含む配列。含まない配列と、それ以外の型は 401。
 TEST(Jwt, AudienceArrayWithoutMatchIs401) {
     auto cfg = base_cfg();
