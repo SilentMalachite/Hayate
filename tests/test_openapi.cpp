@@ -29,6 +29,18 @@ TEST(Openapi, ListsRegisteredRoutes) {
     EXPECT_TRUE(paths.contains("/users/{id}"));
 }
 
+// OpenAPI の paths は `/` で始まる。登録で先頭 `/` を省いても router と同じ path で出す。
+TEST(Openapi, PatternWithoutLeadingSlash) {
+    hayate::App app;
+    app.get("ping", ok);
+    app.group("/api", [](hayate::Router &r) { r.get("ping", ok); });
+    const auto doc = hayate::openapi(app);
+    const auto &paths = doc.at("paths");
+    EXPECT_TRUE(paths.contains("/ping"));
+    EXPECT_TRUE(paths.contains("/api/ping"));
+    EXPECT_EQ(paths.size(), 2U);
+}
+
 TEST(Openapi, PathParamBecomesParameter) {
     hayate::App app;
     app.get("/users/:id", ok);

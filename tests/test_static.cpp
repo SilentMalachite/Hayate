@@ -839,6 +839,31 @@ TEST(Static, HeadFileResponseHasLengthButNoBody) {
     EXPECT_EQ(res.body(), "next");
 }
 
+// ファイルの応答は、MW から見るとまだバイトを持たない。送るのは Connection。
+TEST(Static, FileResponseBodyIsEmptyToMiddleware) {
+    TempDir root;
+    {
+        std::ofstream out(root.dir / "a.txt");
+        out << "hello";
+    }
+    TestServer srv([&](hayate::App &app) {
+        app.use([](hayate::Request &req,
+                   hayate::Next next) -> boost::asio::awaitable<hayate::Response> {
+            auto res = co_await next(req);
+            res.set_header("X-Is-File", res.is_file() ? "1" : "0");
+            res.set_header("X-Body-Size", std::to_string(res.body().size()));
+            co_return res;
+        });
+        app.get("/assets/*path", hayate::files(root.dir.string()));
+    });
+    auto r = http_call("127.0.0.1", srv.port(), http::verb::get, "/assets/a.txt", {}, {},
+                       std::chrono::seconds(2), {}, {"X-Is-File", "X-Body-Size"});
+    EXPECT_EQ(r.status, 200);
+    EXPECT_EQ(r.extra["X-Is-File"], "1");
+    EXPECT_EQ(r.extra["X-Body-Size"], "0");
+    EXPECT_EQ(r.body, "hello");
+}
+
 // 送出中に相手が切れたら、書き込みの失敗で閉じる。write_timeout まで握らない。
 TEST(Static, PeerCloseDuringStreamCloses) {
     constexpr std::size_t kSize = 16u * 1024 * 1024;

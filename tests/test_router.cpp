@@ -5,8 +5,13 @@
 
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 
 namespace http = boost::beast::http;
+
+// move 後の Router は impl_ が空で、どのメンバーも空ポインタを辿る。App と同じく動かさない。
+static_assert(!std::is_move_constructible_v<hayate::Router>);
+static_assert(!std::is_move_assignable_v<hayate::Router>);
 
 // ハンドラは全接続で共有される。mutable は同期・非同期とも受けない。
 namespace {
@@ -115,6 +120,22 @@ TEST(Router, GroupCollapsesDoubleSlash) {
     auto r = http_call("127.0.0.1", srv.port(), http::verb::get, "/api/v1/ping");
     EXPECT_EQ(r.status, 200);
     EXPECT_EQ(r.body, "ok");
+}
+
+// 先頭 `/` は省略できる。group の継ぎ目にも補うので `/apiping` にはならない。
+TEST(Router, PatternWithoutLeadingSlash) {
+    TestServer srv([](hayate::App &app) {
+        app.get("ping", [](hayate::Request &) { return hayate::Response::text("top"); });
+        app.group("/api", [](hayate::Router &r) {
+            r.get("ping", [](hayate::Request &) { return hayate::Response::text("api"); });
+        });
+    });
+    auto top = http_call("127.0.0.1", srv.port(), http::verb::get, "/ping");
+    EXPECT_EQ(top.status, 200);
+    EXPECT_EQ(top.body, "top");
+    auto api = http_call("127.0.0.1", srv.port(), http::verb::get, "/api/ping");
+    EXPECT_EQ(api.status, 200);
+    EXPECT_EQ(api.body, "api");
 }
 
 TEST(Router, QueryValue) {
